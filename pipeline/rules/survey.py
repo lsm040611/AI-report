@@ -21,17 +21,22 @@ NON_ANONYMOUS = {"상사"}        # v0.5: 상사는 비익명 관계로 정의
       "문항 번호로 시트를 이어 붙여 역량명과 정의문을 가져온다")
 def r08_join_question_defs(card: dict, ctx: RuleContext,
                            definitions: Dict[str, dict] | None = None) -> None:
-    definitions = definitions or ctx.roster.get("question_defs", {})
+    definitions = definitions if definitions is not None else ctx.roster.get("question_defs", {})
     if not definitions:
         return
+    joined = 0
     for item in card.get("scores", []):
-        qid = item.get("question_id")
-        meta = definitions.get(qid)
+        qid = str(item.get("question_id") or "").strip()
+        meta = definitions.get(qid) or definitions.get(qid.upper())
         if not meta:
             continue
-        item.setdefault("area_name", meta.get("area_name"))
-        item.setdefault("definition", meta.get("definition"))
-        mark_applied(card, "R-08", "문항정의 시트 조인")
+        if meta.get("area_name"):
+            item["area_name"] = meta["area_name"]
+        if meta.get("definition"):
+            item["definition"] = meta["definition"]
+        joined += 1
+    if joined:
+        mark_applied(card, "R-08", f"문항정의 시트 조인 ({joined}문항)")
 
 
 # --------------------------------------------------------------------------
@@ -46,25 +51,29 @@ def r09_aggregate_responses(target_name: str, responses: List[dict]) -> dict:
     by_relation_count: Dict[str, int] = defaultdict(int)
     per_q_all: Dict[str, List[float]] = defaultdict(list)
     per_q_rel: Dict[str, Dict[str, List[float]]] = defaultdict(lambda: defaultdict(list))
+    order: List[str] = []
 
     for r in responses:
         rel = r.get("relation") or "미상"
         by_relation_count[rel] += 1
         for qid, val in (r.get("answers") or {}).items():
-            if val is None:
+            if val is None or not _numeric(val):
                 continue
+            if qid not in per_q_all:
+                order.append(qid)
             per_q_all[qid].append(float(val))
             per_q_rel[qid][rel].append(float(val))
 
     scores = []
-    for qid in sorted(per_q_all):
+    for qid in order:                       # 원본 문항 순서를 유지한다
         allv = per_q_all[qid]
         scores.append({
             "question_id": qid,
+            "area_name": qid,               # R-08 이 문항정의로 덮어쓴다
             "score": round(sum(allv) / len(allv), 2),
             "n": len(allv),
-            "by_relation": {},          # R-10에서 채운다
-            "_rel_raw": {k: v for k, v in per_q_rel[qid].items()},
+            "by_relation": {},              # R-10에서 채운다
+            "_rel_raw": {k: list(v) for k, v in per_q_rel[qid].items()},
         })
 
     return {
@@ -77,6 +86,18 @@ def r09_aggregate_responses(target_name: str, responses: List[dict]) -> dict:
         },
         "provenance": {"applied_rules": ["R-09 응답 집계(N행->1인)"]},
     }
+
+
+def _numeric(v) -> bool:
+    if isinstance(v, bool):
+        return False
+    if isinstance(v, (int, float)):
+        return True
+    try:
+        float(str(v).strip())
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 # --------------------------------------------------------------------------
@@ -116,6 +137,7 @@ def r10_apply_anonymity(card: dict, ctx: RuleContext) -> None:
             **{r: "separate" for r in separate},
             **{r: "aggregate_only" for r in aggregate_only},
         },
+        "separate": sorted(separate),
         "aggregate_only": sorted(aggregate_only),
     }
 

@@ -6,12 +6,14 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import Dict, List, Optional
 
-from .detect import NAME, NARRATIVE, NOTE, RELATION, SCORE, DetectedSchema
-from .reader import Sheet
-from .rules import report, structural, semantic, survey
+from .detect import (NAME, NARRATIVE, NOTE, RELATION, SCORE, SUMMARY,
+                     DetectedSchema)
+from .reader import Sheet, looks_numeric
+from .rules import report, semantic, structural, survey
 from .rules.base import RuleContext
 
 SCHEMA_VERSION = "0.5"
@@ -30,20 +32,23 @@ def _build_individual(sheet: Sheet, schema: DetectedSchema,
     name_col = schema.name_column
     if name_col is None:
         return cards
+    summary_col = schema.summary_column
 
     for r in schema.data_rows:
         row = sheet.row(r)
-        name = row[name_col.index].text.strip() if name_col.index < len(row) else ""
+        raw_name = row[name_col.index].text.strip() if name_col.index < len(row) else ""
+        name, alias = split_name(raw_name)
 
         scores = [{
             "area_name": col.header,
+            "definition": col.desc or None,
             "score": row[col.index].value if col.index < len(row) else None,
             "scale": dict(col.scale) if col.scale else None,
             "source_cell": row[col.index].coord if col.index < len(row) else None,
         } for col in schema.by_kind(SCORE)]
 
         narratives = [{
-            "original_label": col.header,
+            "original_label": col.full_label,
             "language": _guess_language(row[col.index].text if col.index < len(row) else ""),
             "runs": _runs_of(row, col.index),
             "source_cell": row[col.index].coord if col.index < len(row) else None,
@@ -54,22 +59,29 @@ def _build_individual(sheet: Sheet, schema: DetectedSchema,
         if not structural.r06_is_person_row(name, scores, narratives):
             continue
 
+        # 원본 평균란이 있으면 R-03 이 비교할 수 있게 따로 보관한다
+        score_summary = {}
+        if summary_col is not None and summary_col.index < len(row):
+            raw = row[summary_col.index].value
+            if raw is not None and str(raw).strip():
+                score_summary["original_average"] = raw
+                score_summary["original_cell"] = row[summary_col.index].coord
+
         card = {
             "schema_version": SCHEMA_VERSION,
             "direction": "individual_row",
-            "person": {"name": name, "alias": None,
+            "person": {"name": name, "alias": alias,
                        "status": "regular", "person_id": None},
             "context": dict(schema.meta),
             "scores": scores,
-            "score_summary": {},
+            "score_summary": score_summary,
             "narratives": narratives,
             "aggregation": None,
             "flags": [],
             "provenance": {"file": ctx.source_file, "sheet": sheet.name,
                            "row": r + 1, "applied_rules": []},
         }
-        note = _note_text(row, schema)
-        _apply_common(card, ctx, note)
+        _apply_common(card, ctx, _note_text(row, schema))
         cards.append(card)
     return cards
 
@@ -87,15 +99,18 @@ def _build_aggregated(sheet: Sheet, schema: DetectedSchema,
 
     for r in schema.data_rows:
         row = sheet.row(r)
-        name = row[name_col.index].text.strip()
+        if name_col.index >= len(row):
+            continue
+        name, _alias = split_name(row[name_col.index].text.strip())
         if not name:
             continue
         answers = {c.header: (row[c.index].value if c.index < len(row) else None)
                    for c in schema.by_kind(SCORE)}
         grouped[name].append({
-            "relation": row[rel_col.index].text.strip() if rel_col else "미상",
+            "relation": (row[rel_col.index].text.strip() if rel_col
+                         and rel_col.index < len(row) else "미상") or "미상",
             "answers": answers,
-            "free_text": [{"label": c.header, "relation_hidden": True,
+            "free_text": [{"label": c.full_label, "relation_hidden": True,
                            "text": row[c.index].text}
                           for c in schema.by_kind(NARRATIVE)
                           if c.index < len(row) and row[c.index].text.strip()],
@@ -140,19 +155,29 @@ def _merge_free_text(responses: List[dict]) -> List[dict]:
 
 # --------------------------------------------------------------------------
 def _apply_common(card: dict, ctx: RuleContext, note: str) -> None:
-    """모든 카드가 공통으로 통과하는 정제 규칙 순서."""
+    """모든 카드가 공통으로 통과하는 정제 규칙 순서.
+
+    순서에 의미가 있다: 척도를 붙인 뒤 평균을 계산하고, 역할을 판별한 뒤
+    source_type 을 정하고, 그 다음에야 큐레이션 형태가 결정된다.
+    """
     structural.r01_normalize_dates(card, ctx)
     structural.r02_cast_scores(card, ctx)
     structural.r04_attach_scale(card, ctx)
     structural.r03_recompute_average(card, ctx)
     structural.r05_verify_runs(card, ctx)
+
     semantic.r12_apply(card, ctx)
+    # 역할이 정해진 뒤에야 강조의 뜻을 물을 수 있다 (강점 칸이냐 보완 칸이냐로 뜻이 갈린다)
+    structural.r05_request_semantic_check(card, ctx)
     semantic.r07_detect_audit(card, ctx, note)
     semantic.r15_resolve_person(card, ctx)
     semantic.r18_map_competencies(card, ctx)
     semantic.r13_prepare_translation(card, ctx)
-    report.r11_anonymize(card, ctx)
+
     card["source_type"] = judge_source_type(card)
+
+    report.r11_anonymize(card, ctx)
+    report.r17_prepare_curation(card, ctx)
 
 
 # --------------------------------------------------------------------------
@@ -163,7 +188,7 @@ def judge_source_type(card: dict) -> dict:
     confirmed_by_operator 가 True 가 되어야 진행된다.
     """
     context = card.get("context", {})
-    keys = " ".join(context.keys())
+    keys = " ".join(str(k) for k in context.keys())
 
     if card.get("direction") == "aggregated_responses":
         return {"type": "진단서베이",
@@ -172,7 +197,7 @@ def judge_source_type(card: dict) -> dict:
 
     if any(k in keys for k in ("차수", "회차")):
         round_label = next((str(v) for k, v in context.items()
-                            if "차수" in k or "회차" in k), "")
+                            if "차수" in str(k) or "회차" in str(k)), "")
         return {"type": "누적교육",
                 "evidence": f"차수 표기({round_label}) 존재 → 회차 간 성장 연결 대상",
                 "confirmed_by_operator": False}
@@ -200,6 +225,25 @@ def _note_text(row, schema: DetectedSchema) -> str:
                     if c.index < len(row))
 
 
+ALIAS = re.compile(r"^(?P<name>.+?)\s*[（(]\s*(?P<alias>[^)）]{1,24})\s*[)）]\s*$")
+
+
+def split_name(raw: str):
+    """'서준혁 (Aiden)' → ('서준혁', 'Aiden').
+
+    영어 이름을 괄호로 병기하는 평가지가 많다. 그대로 두면 같은 사람이
+    회차마다 다른 이름이 되고(괄호 표기가 빠지면 매칭 실패), 리포트 제목도
+    '서준혁 (Aiden) 님' 이 된다.
+    """
+    raw = (raw or "").strip()
+    m = ALIAS.match(raw)
+    if not m:
+        return raw, None
+    name = m.group("name").strip()
+    alias = m.group("alias").strip()
+    return (name, alias) if name else (raw, None)
+
+
 def _guess_language(text: str) -> str:
-    hangul = sum(1 for ch in text if "\uac00" <= ch <= "\ud7a3")
+    hangul = sum(1 for ch in text if "가" <= ch <= "힣")
     return "ko" if hangul >= max(3, len(text) * 0.1) else "en"

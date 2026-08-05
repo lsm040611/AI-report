@@ -3,7 +3,7 @@
 전부 담당에 ai 또는 human 이 붙지만, 계약이 각 규칙마다
 "확신 없으면 담당자에게 넘긴다"는 출구를 명시해 두었다.
 따라서 코드는 확신 가능한 구간만 처리하고 나머지는 큐로 보낸다.
-생성형 호출은 이 파일 어디에도 없다.
+생성형 호출은 이 파일 어디에도 없다 — 호출은 generation/worker.py 한 곳뿐이다.
 """
 
 from __future__ import annotations
@@ -18,11 +18,14 @@ from .base import (AI, CODE, HOLD, HUMAN, NOTICE, RuleContext, add_flag,
 # R-12 : 헤더 라벨 -> 역할. 확신도 3단계.
 # --------------------------------------------------------------------------
 ROLE_KEYWORDS: Dict[str, List[str]] = {
-    "strength": ["strength", "강점", "highlight", "잘한", "우수"],
-    "gap": ["gap", "improvement", "보완", "개선", "미흡"],
-    "next_action": ["next action", "homework", "과제", "액션", "실천"],
+    "strength": ["strength", "강점", "highlight", "잘한", "우수", "좋았"],
+    "gap": ["gap", "improvement", "보완", "개선", "미흡", "아쉬"],
+    "next_action": ["next action", "homework", "과제", "액션", "실천", "todo"],
     "change_request": ["바라는 변화", "change request", "요청", "변화"],
 }
+
+# 서술 열의 관례적 순서
+POSITIONAL = ["strength", "gap", "next_action", "change_request"]
 
 HIGH, MEDIUM, LOW = "high", "medium", "low"
 
@@ -47,11 +50,10 @@ def r12_detect_role(label: str, position: Optional[int] = None,
         # 라벨 하나가 두 역할을 동시에 가리키면 직접 판단 불가
         return "unknown", LOW
 
-    # 간접 근거: 서술 열의 관례적 순서 (강점 -> 보완 -> 액션)
-    if position is not None and total in (2, 3):
-        guess = ["strength", "gap", "next_action"][position] if position < 3 else None
-        if guess:
-            return guess, MEDIUM
+    # 간접 근거: 서술 열의 관례적 순서 (강점 -> 보완 -> 액션 -> 요청)
+    if position is not None and total is not None and 2 <= total <= 4:
+        if position < len(POSITIONAL):
+            return POSITIONAL[position], MEDIUM
     return "unknown", LOW
 
 
@@ -78,22 +80,27 @@ def r12_apply(card: dict, ctx: RuleContext) -> None:
 # --------------------------------------------------------------------------
 # R-07 : 비정규 참가자 탐지
 # --------------------------------------------------------------------------
-AUDIT_HINTS = ["청강", "참관", "옵저버", "observer", "audit", "참고", "비정규"]
+AUDIT_HINTS = ["청강", "참관", "옵저버", "observer", "audit", "비정규"]
 
 
 @rule("R-07", f"{CODE}+{AI}+{HUMAN}",
       "청강생 등 비정규 참가자",
       "비고 열 등에서 탐지하고, 애매하면 담당자에게 묻는다. 감지 시 발송 보류")
 def r07_detect_audit(card: dict, ctx: RuleContext, note_text: str = "") -> None:
+    """비고 열과 신분 필드만 본다.
+
+    context(과정 메타) 까지 뒤지면 과정명에 '참고'가 들어간 경우처럼
+    관계없는 문자열에 걸려 전원이 청강생으로 잡힌다.
+    """
     haystack = " ".join(filter(None, [
         note_text,
-        str(card.get("person", {}).get("status") or ""),
-        " ".join(str(v) for v in card.get("context", {}).values()),
+        str((card.get("person") or {}).get("status") or ""),
     ])).lower()
 
     if any(h in haystack for h in AUDIT_HINTS):
         card.setdefault("person", {})["status"] = "audit"
         add_flag(card, "non_regular_participant", HOLD,
+                 detail=f"근거: {note_text.strip()[:40]}",
                  action="발송 전 담당자 확인 필수")
         mark_applied(card, "R-07", "청강생 감지 -> 담당자 확인 플래그")
 
@@ -106,15 +113,23 @@ def r07_detect_audit(card: dict, ctx: RuleContext, note_text: str = "") -> None:
       "명부 사번을 내부 키로. 별칭·조·차수로 좁히고 둘 이상이면 담당자에게 묻고 기억한다")
 def r15_resolve_person(card: dict, ctx: RuleContext) -> None:
     roster: List[dict] = ctx.roster.get("people", [])
+    person = card.setdefault("person", {})
+    name, alias = person.get("name"), person.get("alias")
+    ctxd = card.get("context", {})
+
     if not roster:
         # 제공 데이터가 더미라 명부가 아직 없다(계약 '다음 단계 확인' 항목).
         add_flag(card, "roster_missing", NOTICE,
                  detail="명부 미입력 — person_id 부여 불가")
         return
 
-    person = card.setdefault("person", {})
-    name, alias = person.get("name"), person.get("alias")
-    ctxd = card.get("context", {})
+    # 담당자가 이전에 답한 것을 기억한다
+    memo_key = f"{name}|{alias}|{_first(ctxd, ('과정명', '특강명', '진단명'))}"
+    remembered = ctx.roster.get("resolved", {}).get(memo_key)
+    if remembered:
+        person["person_id"] = remembered
+        mark_applied(card, "R-15", "이전 담당자 판단 재사용")
+        return
 
     cands = [p for p in roster if p.get("name") == name]
     if len(cands) > 1 and alias:
@@ -127,13 +142,6 @@ def r15_resolve_person(card: dict, ctx: RuleContext) -> None:
                     cands = narrowed
                     break
 
-    # 담당자가 이전에 답한 것을 기억한다
-    memo_key = f"{name}|{alias}|{ctxd.get('과정명')}"
-    if memo_key in ctx.roster.get("resolved", {}):
-        person["person_id"] = ctx.roster["resolved"][memo_key]
-        mark_applied(card, "R-15", "이전 담당자 판단 재사용")
-        return
-
     if len(cands) == 1:
         person["person_id"] = cands[0].get("person_id")
         mark_applied(card, "R-15", "명부 매칭")
@@ -145,6 +153,14 @@ def r15_resolve_person(card: dict, ctx: RuleContext) -> None:
         add_flag(card, "person_not_in_roster", HOLD, action="명부 등록 필요")
 
 
+def _first(d: dict, keys) -> str:
+    for k in keys:
+        for actual, v in d.items():
+            if k in str(actual):
+                return str(v)
+    return ""
+
+
 # --------------------------------------------------------------------------
 # R-18 : 표준 역량 매핑
 # --------------------------------------------------------------------------
@@ -154,6 +170,8 @@ DEFAULT_COMPETENCY_MAP = {
     "tone": "어조", "어조": "어조",
     "이해관계 파악": "이해관계파악", "interest mapping": "이해관계파악",
     "논리 구조": "논리구조", "logical structure": "논리구조", "structure": "논리구조",
+    "delivery": "전달력", "전달력": "전달력",
+    "visuals": "자료구성", "q&a": "질의응답",
 }
 
 
@@ -164,6 +182,8 @@ def r18_map_competencies(card: dict, ctx: RuleContext) -> None:
     table = {**DEFAULT_COMPETENCY_MAP, **ctx.competency_map}
     for item in card.get("scores", []):
         name = (item.get("area_name") or "").strip()
+        if not name:
+            continue
         canon = table.get(name.lower()) or table.get(name)
         if canon:
             item["canonical_area"] = canon
@@ -191,6 +211,8 @@ def r13_prepare_translation(card: dict, ctx: RuleContext) -> None:
         if nar.get("language") != "en" or nar.get("translation_ko"):
             continue
         text = "".join(r.get("text", "") for r in nar.get("runs", []))
+        if not text.strip():
+            continue
 
         # 번역해서는 안 되는 구간을 먼저 잠근다 (따옴표 인용 + 강조된 표현)
         preserve = set(QUOTED.findall(text))
@@ -202,6 +224,7 @@ def r13_prepare_translation(card: dict, ctx: RuleContext) -> None:
         add_flag(card, "translation_pending", NOTICE,
                  target=nar.get("original_label"))
         request_handoff(ctx, card, "R-13", "translate_en_to_ko", {
+            "label": nar.get("original_label"),      # 결과를 어느 칸에 되돌릴지
             "source_text": text,
             "preserve_verbatim": sorted(preserve),
             "role": nar.get("role"),

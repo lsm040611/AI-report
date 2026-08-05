@@ -17,7 +17,11 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 from openpyxl import load_workbook
-from openpyxl.cell.rich_text import CellRichText
+
+try:                                    # openpyxl 3.1+
+    from openpyxl.cell.rich_text import CellRichText
+except ImportError:                     # pragma: no cover
+    CellRichText = ()                   # type: ignore[assignment]
 
 
 @dataclass
@@ -52,15 +56,33 @@ class Sheet:
 
 def read_workbook(path: str) -> List[Sheet]:
     """원본은 절대 수정하지 않는다. 읽기 전용으로만 연다."""
-    wb = load_workbook(path, data_only=True, rich_text=True)
+    try:
+        wb = load_workbook(path, data_only=True, rich_text=True)
+    except TypeError:
+        # openpyxl 3.0 이하 — 부분 서식을 읽을 수 없다. 셀 전체 서식만 살린다.
+        wb = load_workbook(path, data_only=True)
+
     sheets = []
     for ws in wb.worksheets:
         grid = []
         for row in ws.iter_rows():
-            grid.append([Cell(c.coordinate, c.value, _to_runs(c)) for c in row])
+            grid.append([Cell(c.coordinate, _plain(c.value), _to_runs(c)) for c in row])
         sheets.append(Sheet(ws.title, grid))
     wb.close()
     return sheets
+
+
+def _plain(value):
+    """`.value` 에는 저장 가능한 형태만 남긴다.
+
+    서식이 섞인 셀의 원래 값은 openpyxl 의 CellRichText — 파이썬 객체다.
+    이게 카드에 그대로 실리면 DB(JSON 컬럼)에 저장할 때 터진다.
+    서식 정보는 `.runs` 가 이미 갖고 있으므로, `.value` 는 평문이면 충분하다.
+    """
+    if CellRichText and isinstance(value, CellRichText):
+        return "".join(b if isinstance(b, str) else (getattr(b, "text", "") or "")
+                       for b in value)
+    return value
 
 
 def _to_runs(cell) -> List[dict]:
@@ -69,7 +91,7 @@ def _to_runs(cell) -> List[dict]:
     if value is None:
         return []
 
-    if isinstance(value, CellRichText):
+    if CellRichText and isinstance(value, CellRichText):
         runs = []
         for block in value:
             if isinstance(block, str):
@@ -79,7 +101,8 @@ def _to_runs(cell) -> List[dict]:
             text = getattr(block, "text", "") or ""
             if not text:
                 continue
-            runs.append({"text": text, "emphasis": _emphasis(getattr(block, "font", None))})
+            runs.append({"text": text,
+                         "emphasis": _emphasis(getattr(block, "font", None))})
         return _merge(runs)
 
     if isinstance(value, str):
@@ -107,7 +130,10 @@ def _is_red(color) -> bool:
     rgb = getattr(color, "rgb", None)
     if not isinstance(rgb, str) or len(rgb) < 6:
         return False
-    r, g, b = (int(rgb[-6:][i:i + 2], 16) for i in (0, 2, 4))
+    try:
+        r, g, b = (int(rgb[-6:][i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return False
     return r > 140 and r > g * 1.6 and r > b * 1.6
 
 
