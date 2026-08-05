@@ -93,12 +93,6 @@ INDEX = """
  pre{background:var(--cream);border:1px solid var(--line);border-radius:4px;
      padding:14px;font-size:12.5px;overflow:auto;white-space:pre-wrap}
  .err{color:var(--red);font-weight:700}
- .notes{margin-top:18px;border-top:1px solid #EFE8D9;padding-top:12px}
- .notes summary{font-size:13px;color:var(--muted);cursor:pointer;list-style:none}
- .notes summary::before{content:'▸ ';font-size:11px}
- .notes[open] summary::before{content:'▾ '}
- .notes ul{margin:10px 0 0;padding-left:18px;font-size:13px;color:var(--muted);
-           line-height:1.75}
 </style></head><body>
 <div class=sheet>
   <h1>HR AI 리포트 엔진</h1>
@@ -147,16 +141,9 @@ f.addEventListener('submit',async e=>{
                      : '<span class=blk>'+x.blocked_by+'</span>')+'</div>';
     });
 
-    // 담당자용 안내는 접어 둔다 — 리포트를 보러 온 화면에 원시 로그가 깔리면
-    // 무엇이 잘 됐는지가 안 보인다.
-    const notes=[];
-    (d.warnings||[]).forEach(w=>notes.push(esc(w)));
-    ((d.generation&&d.generation.rejects)||[]).forEach(r=>
-      notes.push('<b>'+esc(r.rule_id)+'</b> '+esc(r.person||'')+' — '+esc(r.reason||'')));
-    if(d.report_error) notes.push('리포트 생성 오류 — '+esc(d.report_error));
-    if(notes.length)
-      h+='<details class=notes><summary>처리 안내 '+notes.length+'건</summary><ul><li>'+
-         notes.join('</li><li>')+'</li></ul></details>';
+    // 규칙 처리 내역(경고·생성 거부)은 이 화면에 띄우지 않는다. 리포트를 받으러
+    // 온 사람에게는 소음이고, 담당자가 볼 것은 대시보드와 /uploads 응답에 남아 있다.
+    // 사람별로 막힌 건은 위 목록에 blocked_by 로 이미 보인다.
     out.innerHTML=h;
   }catch(err){out.innerHTML='<p class=err>'+err+'</p>';}
   finally{b.disabled=false;}
