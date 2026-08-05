@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -23,6 +23,13 @@ router = APIRouter(prefix="/handoff", tags=["handoff"])
 
 
 class Callback(BaseModel):
+    """외부 생성 결과.
+
+    작업마다 딸려 오는 필드가 다르다 — R-05 는 `spans`, 암기 문장은 `parts`·`closing`.
+    추가 필드를 그대로 통과시켜야 외부 자동화(n8n 등)도 내장 워커와 같은 일을 할 수 있다.
+    """
+    model_config = ConfigDict(extra="allow")
+
     text: str
     evidence: List[dict] = []     # [{"quote": "...", "why": "..."}]
     engine: Optional[str] = None
