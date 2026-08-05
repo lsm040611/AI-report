@@ -447,6 +447,65 @@ def case_blind_new_format():
     check("결측은 0이 아니라 미평가", gap["score"] is None, gap)
 
 
+def case_multi_file_upload():
+    """여러 파일을 한 번에 — 순서를 거꾸로 올려도 성장 비교가 붙어야 한다.
+
+    파일을 하나씩 처리하며 리포트까지 만들면, 2차수를 먼저 올린 경우 비교할
+    1차수가 아직 없어 성장 섹션이 빠진다. 카드를 모두 만든 뒤에 리포트를
+    만들어야 순서와 무관해진다.
+    """
+    import datetime as _dt
+    from fastapi.testclient import TestClient
+    from main import app
+
+    def build(wb, when, label, tone_scores):
+        ws = wb.active
+        ws["A1"] = "과정명"; ws["B1"] = "Multi Upload Program"
+        ws["A2"] = "차수"; ws["B2"] = label
+        ws["A3"] = "날짜"; ws["B3"] = when
+        ws["A5"] = "이름"
+        for i, h in enumerate(["Tone", "Accuracy", "잘한 점"]):
+            ws.cell(row=5, column=2 + i, value=h)
+        for r, (name, tone, acc) in enumerate(tone_scores, start=6):
+            ws.cell(row=r, column=1, value=name)
+            ws.cell(row=r, column=2, value=tone)
+            ws.cell(row=r, column=3, value=acc)
+            ws.cell(row=r, column=4, value="정리가 명확했습니다.")
+
+    first = os.path.join(TMP, "multi_1차수.xlsx")
+    second = os.path.join(TMP, "multi_2차수.xlsx")
+    for path, when, label, rows in (
+            (first, "2026-03-02", "1차수", [("김유나", 3.5, 4.0), ("박建", 4.0, 3.5)]),
+            (second, "2026-03-16", "2차수", [("김유나", 4.0, 4.0), ("박建", 4.0, 4.5)])):
+        wb = Workbook()
+        build(wb, when, label, rows)
+        wb.save(path)
+
+    client = TestClient(app)
+    # 일부러 2차수를 먼저 올린다
+    payload = [("file", (os.path.basename(p), open(p, "rb"))) for p in (second, first)]
+    r = client.post("/uploads", files=payload)
+    check("여러 파일 업로드 200", r.status_code == 200, r.text[:200])
+    if r.status_code != 200:
+        return
+
+    d = r.json()
+    check("파일별로 결과가 나뉨", len(d.get("uploads", [])) == 2,
+          [u.get("filename") for u in d.get("uploads", [])])
+    check("합계도 함께 옴", d["files"] == 2 and d["cards"] == 4,
+          (d.get("files"), d.get("cards")))
+
+    later = next(u for u in d["uploads"] if "2차수" in u["filename"])
+    grew = 0
+    for item in later["reports"]:
+        if not item.get("report_id"):
+            continue
+        body = client.get(f"/reports/{item['report_id']}").json()["body"]
+        if (body["sections"].get("growth") or {}).get("status") == "compared":
+            grew += 1
+    check("나중 차수를 먼저 올려도 성장 비교가 붙음", grew == 2, f"{grew}/2")
+
+
 def case_http_roundtrip():
     """실제 업로드 경로(HTTP)로도 저장까지 통과하는지."""
     from fastapi.testclient import TestClient
@@ -475,7 +534,7 @@ if __name__ == "__main__":
                case_gap_comment_rewrite, case_tone_normalisation,
                case_two_line_header_and_alias, case_english_comment_translation,
                case_emphasis_reinterpreted, case_blind_new_format,
-               case_http_roundtrip):
+               case_multi_file_upload, case_http_roundtrip):
         print(f"\n── {fn.__doc__.splitlines()[0]}")
         try:
             fn()

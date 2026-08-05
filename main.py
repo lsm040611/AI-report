@@ -84,7 +84,13 @@ INDEX = """
  button{font:inherit;font-weight:700;background:var(--red);color:#fff;border:0;
         border-radius:20px;padding:9px 22px;cursor:pointer;margin-top:14px}
  button[disabled]{opacity:.5;cursor:progress}
+ .hint{display:block;font-size:12.5px;color:var(--muted);margin-top:6px}
  #out{margin-top:26px}
+ .ftabs{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0 4px}
+ .ftab{font:inherit;font-size:12.5px;font-weight:600;background:#fff;color:var(--ink-2);
+       border:1px solid var(--line);border-radius:20px;padding:6px 14px;cursor:pointer}
+ .ftab.on{background:var(--sk-red,var(--red));border-color:var(--red);color:#fff}
+ .ftab .cnt{opacity:.65;margin-left:5px;font-weight:700}
  .row{display:flex;align-items:center;gap:12px;padding:11px 0;
       border-bottom:1px solid #EFE8D9}
  .row a{color:var(--red);font-weight:700;text-decoration:none}
@@ -99,8 +105,9 @@ INDEX = """
   <div class=mode>__MODE__</div>
 
   <form id=f class=drop>
-    <div>평가지(.xlsx)를 올리면 리포트까지 한 번에 만듭니다.</div>
-    <input type=file name=file accept=".xlsx,.xlsm" required>
+    <div>평가지(.xlsx)를 올리면 리포트까지 한 번에 만듭니다.
+      <span class=hint>여러 개를 한 번에 고를 수 있습니다 — 1차수와 2차수를 함께 올리면 성장 비교가 붙습니다.</span></div>
+    <input type=file name=file accept=".xlsx,.xlsm" multiple required>
     <br><button id=b type=submit>업로드하고 리포트 만들기</button>
   </form>
 
@@ -130,24 +137,46 @@ f.addEventListener('submit',async e=>{
       if(d.traceback) h+='<pre>'+d.traceback.join('\\n').replace(/</g,'&lt;')+'</pre>';
       out.innerHTML=h; return;
     }
-    const kinds=Object.entries(d.by_source_type||{})
-      .map(([k,v])=>k+' '+v+'명').join(' · ');
-    const made=(d.reports||[]).filter(x=>x.report_id).length;
-    let h='<p><b>카드 '+d.cards+'장</b>'+(kinds?' · '+kinds:'')+
-          ' · 리포트 '+made+'편</p>';
-    (d.reports||[]).forEach(x=>{
-      h+='<div class=row><span class=nm>'+x.name+'</span>'+
-         (x.report_id? '<a href="'+x.html+'" target=_blank>리포트 열기 ↗</a>'
-                     : '<span class=blk>'+x.blocked_by+'</span>')+'</div>';
-    });
-
-    // 규칙 처리 내역(경고·생성 거부)은 이 화면에 띄우지 않는다. 리포트를 받으러
-    // 온 사람에게는 소음이고, 담당자가 볼 것은 대시보드와 /uploads 응답에 남아 있다.
-    // 사람별로 막힌 건은 위 목록에 blocked_by 로 이미 보인다.
-    out.innerHTML=h;
+    render(d);
   }catch(err){out.innerHTML='<p class=err>'+err+'</p>';}
   finally{b.disabled=false;}
 });
+
+// 파일이 하나면 목록만, 여럿이면 파일 탭을 두고 골라 보게 한다.
+let LAST=null;
+function render(d){
+  LAST=d;
+  const ups=d.uploads||[];
+  const kinds=Object.entries(d.by_source_type||{}).map(([k,v])=>k+' '+v+'명').join(' · ');
+  const made=(d.reports||[]).filter(x=>x.report_id).length;
+  let h='<p><b>파일 '+ups.length+'개 · 카드 '+d.cards+'장</b>'+
+        (kinds?' · '+kinds:'')+' · 리포트 '+made+'편</p>';
+  if(ups.length>1){
+    h+='<div class=ftabs>'+ups.map((u,i)=>
+      '<button class="ftab'+(i===0?' on':'')+'" data-i="'+i+'">'+
+      esc(u.filename)+' <span class=cnt>'+
+      ((u.reports||[]).filter(r=>r.report_id).length)+'</span></button>').join('')+'</div>';
+  }
+  h+='<div id=flist></div>';
+  out.innerHTML=h;
+  out.querySelectorAll('.ftab').forEach(t=>t.onclick=()=>{
+    out.querySelectorAll('.ftab').forEach(x=>x.classList.remove('on'));
+    t.classList.add('on');
+    showFile(+t.dataset.i);
+  });
+  showFile(0);
+}
+
+function showFile(i){
+  const u=(LAST.uploads||[])[i]; if(!u) return;
+  const list=document.getElementById('flist');
+  if(u.error){ list.innerHTML='<p class=err>'+esc(u.error)+'</p>'; return; }
+  const rows=(u.reports||[]).map(x=>
+    '<div class=row><span class=nm>'+esc(x.name)+'</span>'+
+    (x.report_id? '<a href="'+x.html+'" target=_blank>리포트 열기 ↗</a>'
+                : '<span class=blk>'+esc(x.blocked_by)+'</span>')+'</div>').join('');
+  list.innerHTML=rows||'<p class=blk>이 파일에서 만들어진 리포트가 없습니다.</p>';
+}
 </script></body></html>
 """
 

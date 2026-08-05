@@ -22,67 +22,125 @@ router = APIRouter(prefix="/uploads", tags=["uploads"])
 
 
 @router.post("")
-def create_upload(file: UploadFile = File(...),
+def create_upload(file: List[UploadFile] = File(..., description="xlsx 파일 (여러 개 가능)"),
                   auto: Optional[bool] = Query(
                       None, description="생성·리포트까지 한 번에. 미지정 시 설정값(HR_AUTO_APPROVE)"),
                   db: Session = Depends(get_db)):
-    if not (file.filename or "").lower().endswith((".xlsx", ".xlsm")):
-        raise HTTPException(400, "xlsx 파일만 지원합니다")
+    """평가지를 한 개 또는 여러 개 받아 처리한다.
+
+    여러 개를 함께 받는 이유는 편의만이 아니다. 1차수와 2차수를 같이 올리면
+    회차 간 성장 비교(R-14)가 그 자리에서 완성된다. 그래서 파일을 모두 읽어
+    카드를 만든 **뒤에** 리포트를 만든다 — 순서를 어떻게 고르든 결과가 같도록.
+    """
+    files = [f for f in file if (f.filename or "").strip()]
+    if not files:
+        raise HTTPException(400, "파일이 없습니다")
+    bad = [f.filename for f in files
+           if not (f.filename or "").lower().endswith((".xlsx", ".xlsm"))]
+    if bad:
+        raise HTTPException(400, f"xlsx 파일만 지원합니다 — {', '.join(bad)}")
 
     auto_mode = AUTO_APPROVE if auto is None else auto
-
     os.makedirs(STORAGE_DIR, exist_ok=True)
-    path = os.path.join(STORAGE_DIR, os.path.basename(file.filename))
-    with open(path, "wb") as out:            # 원본은 그대로 보관, 이후 읽기만
-        shutil.copyfileobj(file.file, out)
 
-    try:
-        result = run_pipeline(path,
-                              roster=_roster(db),
-                              competency_map=_comp_map(db),
-                              auto_approve=auto_mode)
-    except Exception as exc:                 # noqa: BLE001
-        raise HTTPException(400, f"엑셀을 읽지 못했습니다 — {type(exc).__name__}: {exc}")
+    # ── 1단계: 파일마다 카드를 만들어 저장한다 ────────────────────────────
+    entries: List[dict] = []
+    for f in files:
+        path = os.path.join(STORAGE_DIR, os.path.basename(f.filename))
+        with open(path, "wb") as out:        # 원본은 그대로 보관, 이후 읽기만
+            shutil.copyfileobj(f.file, out)
 
-    upload = Upload(filename=file.filename, stored_path=path,
-                    warnings=result["warnings"])
-    db.add(upload)
-    db.flush()
+        try:
+            result = run_pipeline(path,
+                                  roster=_roster(db),
+                                  competency_map=_comp_map(db),
+                                  auto_approve=auto_mode)
+        except Exception as exc:             # noqa: BLE001
+            # 한 파일이 깨졌다고 나머지까지 버리지 않는다
+            entries.append({"filename": f.filename, "cards": 0, "reports": [],
+                            "error": f"엑셀을 읽지 못했습니다 — {type(exc).__name__}: {exc}"})
+            continue
 
-    for card_json in result["cards"]:
-        db.add(_to_row(upload.id, card_json))
-    db.flush()
+        upload = Upload(filename=f.filename, stored_path=path,
+                        warnings=result["warnings"])
+        db.add(upload)
+        db.flush()
+        for card_json in result["cards"]:
+            db.add(_to_row(upload.id, card_json))
+        db.flush()
+        _queue_handoffs(db, upload.id, result["handoffs"])
 
-    _queue_handoffs(db, upload.id, result["handoffs"])
+        entries.append({"upload_id": upload.id, "filename": f.filename,
+                        **result["summary"], "warnings": result["warnings"]})
     db.commit()
 
-    response: Dict[str, Any] = {
-        "upload_id": upload.id,
-        "mode": mode_banner(),
-        **result["summary"],
-        "warnings": result["warnings"],
-    }
+    response: Dict[str, Any] = {"mode": mode_banner(), "uploads": entries}
+    _add_totals(response, entries)
 
     if not auto_mode:
-        response["next"] = f"/uploads/{upload.id}/cards 에서 source_type 승인 필요"
+        response["next"] = "각 업로드의 /uploads/{id}/cards 에서 source_type 승인 필요"
         return response
 
-    # ── 자동 모드: 생성 큐 소진 → 리포트 생성 ────────────────────────────
+    # ── 2단계: 생성 큐를 소진한다 ────────────────────────────────────────
     # 여기서 죽어도 카드는 이미 저장돼 있다. 뒤 단계 실패로 앞 단계까지
     # 통째로 500이 되면 무엇이 됐고 무엇이 안 됐는지 알 수 없으므로 나눠 잡는다.
-    try:
-        response["generation"] = drain(db, upload_id=upload.id)
-    except Exception as exc:                 # noqa: BLE001
-        db.rollback()
-        response["generation"] = {"error": f"{type(exc).__name__}: {exc}"}
+    for e in entries:
+        if not e.get("upload_id"):
+            continue
+        try:
+            e["generation"] = drain(db, upload_id=e["upload_id"])
+        except Exception as exc:             # noqa: BLE001
+            db.rollback()
+            e["generation"] = {"error": f"{type(exc).__name__}: {exc}"}
 
-    try:
-        response["reports"] = _build_all(db, upload.id)
-    except Exception as exc:                 # noqa: BLE001
-        db.rollback()
-        response["reports"] = []
-        response["report_error"] = f"{type(exc).__name__}: {exc}"
+    # ── 3단계: 모든 카드가 준비된 뒤에 리포트를 만든다 ────────────────────
+    for e in entries:
+        if not e.get("upload_id"):
+            continue
+        try:
+            e["reports"] = _build_all(db, e["upload_id"])
+        except Exception as exc:             # noqa: BLE001
+            db.rollback()
+            e["reports"] = []
+            e["error"] = f"리포트 생성 실패 — {type(exc).__name__}: {exc}"
+
+    _add_totals(response, entries)
     return response
+
+
+def _add_totals(response: Dict[str, Any], entries: List[dict]) -> None:
+    """파일별 결과를 합쳐 요약을 붙인다.
+
+    단일 파일을 올리던 때의 응답 형태(`cards`, `reports`, `warnings` …)를 그대로
+    유지한다 — 기존 스크립트와 테스트가 계속 동작해야 하기 때문이다.
+    """
+    by_type: Dict[str, int] = {}
+    for e in entries:
+        for k, v in (e.get("by_source_type") or {}).items():
+            by_type[k] = by_type.get(k, 0) + v
+
+    reports = [r for e in entries for r in (e.get("reports") or [])]
+    response.update({
+        "files": len(entries),
+        "cards": sum(e.get("cards", 0) for e in entries),
+        "by_source_type": by_type,
+        "question_defs": sum(e.get("question_defs", 0) for e in entries),
+        "pending_generation": sum(e.get("pending_generation", 0) for e in entries),
+        "warnings": [w for e in entries for w in (e.get("warnings") or [])],
+        "reports": reports,
+    })
+    if any("generation" in e for e in entries):
+        gens = [e["generation"] for e in entries if isinstance(e.get("generation"), dict)]
+        response["generation"] = {
+            "accepted": sum(g.get("accepted", 0) for g in gens),
+            "rejected": sum(g.get("rejected", 0) for g in gens),
+            "rejects": [r for g in gens for r in (g.get("rejects") or [])],
+        }
+    if len(entries) == 1 and entries[0].get("upload_id"):
+        response["upload_id"] = entries[0]["upload_id"]
+    errors = [e["error"] for e in entries if e.get("error")]
+    if errors:
+        response["file_errors"] = errors
 
 
 @router.post("/{upload_id}/finish")
