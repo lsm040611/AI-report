@@ -4,6 +4,11 @@ rem  ASCII ONLY. Do not put Korean text in this file.
 rem  cmd.exe reads .bat with the system codepage (CP949 here), so
 rem  UTF-8 Korean bytes corrupt the parser and break the whole file.
 rem ---------------------------------------------------------------
+rem Python prints Korean in UTF-8; the console defaults to CP949 and would
+rem show it as garbage. Switch the console to UTF-8 before running anything.
+chcp 65001 >nul
+set PYTHONIOENCODING=utf-8
+
 title HR AI Report Engine
 cd /d "%~dp0"
 
