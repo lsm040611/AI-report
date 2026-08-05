@@ -10,6 +10,7 @@ import re
 from collections import defaultdict
 from typing import Dict, List, Optional
 
+from .detect import EMP_ID as EMP_ID_COL
 from .detect import (EMAIL, EMAIL_RE, NAME, NARRATIVE, NOTE, RELATION, SCORE, SUMMARY,
                      DetectedSchema)
 from .reader import Sheet, looks_numeric
@@ -75,6 +76,15 @@ def _build_individual(sheet: Sheet, schema: DetectedSchema,
                 candidate = row[col.index].text.strip()
                 if EMAIL_RE.match(candidate):
                     email = candidate
+                    break
+
+        # 사번은 별도 열에 있을 수도, 이름 칸 안에 있을 수도 있다.
+        # 별도 열이 있으면 그쪽이 우선 — 더 분명하게 적힌 값이다.
+        for col in schema.by_kind(EMP_ID_COL):
+            if col.index < len(row):
+                candidate = row[col.index].text.strip()
+                if candidate:
+                    emp_id = candidate
                     break
 
         card = {
@@ -235,30 +245,43 @@ def _note_text(row, schema: DetectedSchema) -> str:
                     if c.index < len(row))
 
 
-ALIAS = re.compile(r"^(?P<name>.+?)\s*[（(]\s*(?P<extra>[^)）]{1,24})\s*[)）]\s*$")
+# 부기 표기 세 가지. 괄호가 가장 흔하지만 슬래시·쉼표도 실제로 쓰인다.
+ALIAS_PAREN = re.compile(r"^(?P<name>.+?)\s*[（(]\s*(?P<extra>[^)）]{1,24})\s*[)）]\s*$")
+ALIAS_SLASH = re.compile(r"^(?P<name>[^/｜|]+?)\s*[/｜|]\s*(?P<extra>[^/｜|]{1,24})$")
+ALIAS_COMMA = re.compile(r"^(?P<name>[^,]+?)\s*,\s*(?P<extra>[^,]{1,24})$")
+ALIAS_FORMS = (ALIAS_PAREN, ALIAS_SLASH, ALIAS_COMMA)
+
 # 사번처럼 보이는 것 — 영문 접두 + 숫자, 또는 숫자만
 EMP_ID = re.compile(r"^(?:[A-Za-z]{1,3}[-_]?\d{3,}|\d{4,})$")
 
 
 def split_name(raw: str):
     """'서준혁 (Aiden)' → ('서준혁', 'Aiden', None)
+       '조은결/Eugene'  → ('조은결', 'Eugene', None)
        '임채원 (E20417)' → ('임채원', None, 'E20417')
 
-    괄호 안에 들어가는 것은 두 종류다 — 영어 이름 같은 별칭이거나, 사번이다.
+    이름 칸에 덧붙는 것은 두 종류다 — 영어 이름 같은 별칭이거나, 사번이다.
     사번을 별칭 자리에 넣으면 리포트 제목이 '임채원 님 E20417' 이 되고,
     정작 R-15(동명이인 판정)가 쓸 수 있는 신원 키는 비어 있게 된다.
+
+    구분 기호는 파일마다 다르다. 괄호만 보다가 '조은결/Eugene' 이 통째로
+    이름이 되어 리포트 제목에 그대로 실린 적이 있다.
     """
     raw = (raw or "").strip()
-    m = ALIAS.match(raw)
-    if not m:
-        return raw, None, None
-    name = m.group("name").strip()
-    extra = m.group("extra").strip()
-    if not name:
-        return raw, None, None
-    if EMP_ID.match(extra):
-        return name, None, extra          # 사번 → person_id
-    return name, extra, None              # 그 밖 → 별칭
+    for pattern in ALIAS_FORMS:
+        m = pattern.match(raw)
+        if not m:
+            continue
+        name = m.group("name").strip()
+        extra = m.group("extra").strip()
+        # 한 글자 이름은 없다. 이 조건이 없으면 'A/B 테스트 담당' 이
+        # 이름 'A' + 별칭 'B 테스트 담당' 으로 쪼개진다.
+        if len(name) < 2 or not extra:
+            continue
+        if EMP_ID.match(extra):
+            return name, None, extra      # 사번 → person_id
+        return name, extra, None          # 그 밖 → 별칭
+    return raw, None, None
 
 
 def _guess_language(text: str) -> str:

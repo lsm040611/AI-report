@@ -20,6 +20,11 @@ EMAIL_HINTS = ["이메일", "메일", "email", "e-mail", "mail"]
 # 주소는 라벨이 없어도 모양으로 알아본다 — 라벨이 '연락처'일 수도 있기 때문이다
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
 
+# 'id' 만 넣으면 'Provide' 같은 역량명에도 걸린다. 온전한 낱말만 본다.
+EMPID_HINTS = ["사번", "사원번호", "직원번호", "employeeid", "empid", "empno", "사원id"]
+# 영문 접두 + 숫자, 또는 숫자만. builder.split_name 과 같은 판단 기준이다.
+EMPID_RE = re.compile(r"^(?:[A-Za-z]{1,3}[-_]?\d{3,}|\d{4,})$")
+
 # 관계 열만은 부분 일치로 잡지 않는다.
 # "관계"를 부분 일치로 두면 '이해관계 파악' 같은 역량명이 관계 열로 오인되어
 # 점수 열이 통째로 사라진다. 실제로 그렇게 한 역량이 리포트에서 누락됐었다.
@@ -31,6 +36,7 @@ SUMMARY_HINTS = ["평균", "average", "총점", "합계", "total", "종합"]
 QUESTION_ID = re.compile(r"^Q\s*\d+$", re.IGNORECASE)
 
 EMAIL = "email"            # 리포트를 보낼 주소
+EMP_ID = "emp_id"          # 사번 — 동명이인을 가르는 신원 키
 SCORE = "score"
 SUMMARY = "summary"        # 원본 평균란 — 역량이 아니므로 점수에 섞지 않는다
 NARRATIVE = "narrative"
@@ -221,6 +227,15 @@ def _classify_one(label: str, values: List, texts: List[str],
         if flat in RELATION_EXACT:
             return RELATION, "medium", None
         return UNKNOWN, "low", None
+
+    # 사번이 점수보다 먼저다. 숫자만으로 된 사번(20260519 같은)을 그냥 두면
+    # 점수 열로 잡혀 평균에 섞인다. 다만 숫자만인 경우는 라벨이 사번이라고
+    # 말해 줄 때만 인정한다 — 아니면 100점 척도 점수를 사번으로 볼 수 있다.
+    if any(h in flat for h in EMPID_HINTS):
+        return EMP_ID, "high", None
+    if texts and sum(1 for t in texts
+                     if re.match(r"^[A-Za-z]{1,3}[-_]?\d{3,}$", t.strip())) / len(texts) >= 0.6:
+        return EMP_ID, "high", None
 
     numeric_ratio = sum(1 for v in values if looks_numeric(v)) / len(values)
     if numeric_ratio >= 0.8:

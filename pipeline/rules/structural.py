@@ -191,8 +191,10 @@ def r05_request_semantic_check(card: dict, ctx: RuleContext) -> None:
         text = "".join(r.get("text", "") for r in runs)
         if not text.strip():
             continue
+        # 실제로 칠한 서식을 그대로 넘긴다. 서식 → 뜻 매핑을 한 번 거친 라벨을
+        # 넘기면, 색만 바꾼 평가지에서 판정이 이미 틀어진 채로 도착한다.
         marked = [{"text": (r.get("text") or "").strip(),
-                   "format": FORMAT_LABEL.get(r.get("emphasis"), "")}
+                   "format": r.get("format") or FORMAT_LABEL.get(r.get("emphasis"), "")}
                   for r in runs if r.get("emphasis")]
         if not marked and "→" not in text and "->" not in text:
             continue                       # 강조도 화살표도 없으면 볼 것이 없다
