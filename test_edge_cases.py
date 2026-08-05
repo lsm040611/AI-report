@@ -383,6 +383,70 @@ def case_emphasis_reinterpreted():
           [("abc def", "issue_expression"), (" ghi", None)], runs)
 
 
+def case_blind_new_format():
+    """처음 보는 양식 — 최종 발표 블라인드 테스트를 흉내낸 것.
+
+    지금까지 쓰던 양식과 일부러 전부 다르게 만든다: 척도 1~7, 머리부 3열 배치,
+    평균이 앞쪽, 처음 보는 역량명, 이름 칸에 사번.
+    """
+    def build(wb):
+        ws = wb.active
+        ws.title = "C조 평가표"
+        ws["A1"] = "프로그램"; ws["B1"] = "Customer Excellence Lab"
+        ws["D1"] = "운영"; ws["E1"] = "CX운영팀"
+        ws["A2"] = "퍼실리테이터"; ws["B2"] = "정하윤"
+        ws["A3"] = "실시일"; ws["B3"] = "2026-08-12"
+        ws["D3"] = "회차"; ws["E3"] = "3회차"
+        for i, h in enumerate(["참가자", "종합 평균", "공감 표현\nEmpathy",
+                               "문제 정의\nProblem framing", "대안 제시\nOption giving",
+                               "잘한 점", "다음에 더 좋아질 점", "메모"]):
+            ws.cell(row=5, column=1 + i, value=h)
+
+        ws["A6"] = "임채원 (E20417)"
+        ws["B6"] = 6.0
+        ws["C6"], ws["D6"], ws["E6"] = 6.0, 5.5, 6.5
+        ws["F6"] = "고객이 말을 끝내기 전에 끼어들지 않았습니다."
+        ws["G6"] = "해결책을 먼저 던지는 장면이 있었습니다."
+
+        ws["A7"] = "노시우 (E20418)"
+        ws["B7"] = 5.2
+        ws["C7"], ws["D7"], ws["E7"] = 5.0, 5.5, 5.0
+        ws["F7"] = "질문이 구체적입니다."
+        ws["G7"] = "말이 빨라 고객이 되묻는 일이 있었습니다."
+
+        ws["A8"] = "백지훈 (E20419)"
+        ws["B8"] = 6.2
+        ws["C8"], ws["D8"] = 6.5, 6.0          # 대안 제시 결측(조퇴)
+        ws["F8"] = "대안을 두 개씩 제시했습니다."
+        ws["G8"] = "마무리 확인이 생략된 통화가 있었습니다."
+        ws["H8"] = "조퇴"
+
+        ws["A10"] = "※ 7점 만점, 0.5 단위로 평가합니다"   # 각주 행 + 척도 힌트
+
+    r = run("blind_new_format.xlsx", build)
+
+    check("각주 행을 빼고 3장", r["summary"]["cards"] == 3, r["summary"]["cards"])
+    card = r["cards"][0]
+    p = card["person"]
+    check("사번은 신원 키로 (제목에 붙지 않음)",
+          (p["name"], p["alias"], p["person_id"]) == ("임채원", None, "E20417"), p)
+
+    scale = card["score_summary"]["scale"]
+    check("'7점 만점' 문구로 척도 인식", (scale["min"], scale["max"]) == (1, 7), scale)
+
+    s = card["scores"][0]
+    check("역량명은 첫 줄만", s["area_name"] == "공감 표현", s["area_name"])
+    check("둘째 줄은 정의문", s["definition"] == "Empathy", s.get("definition"))
+    check("평균 열은 역량에서 제외", len(card["scores"]) == 3,
+          [x["area_name"] for x in card["scores"]])
+    check("원본 평균을 따로 보관", card["score_summary"]["original_average"] == 6.0,
+          card["score_summary"])
+
+    missing = [c for c in r["cards"] if c["person"]["name"] == "백지훈"][0]
+    gap = [x for x in missing["scores"] if x["area_name"] == "대안 제시"][0]
+    check("결측은 0이 아니라 미평가", gap["score"] is None, gap)
+
+
 def case_http_roundtrip():
     """실제 업로드 경로(HTTP)로도 저장까지 통과하는지."""
     from fastapi.testclient import TestClient
@@ -410,7 +474,8 @@ if __name__ == "__main__":
                case_growth_mapping_drift, case_action_items_from_emphasis,
                case_gap_comment_rewrite, case_tone_normalisation,
                case_two_line_header_and_alias, case_english_comment_translation,
-               case_emphasis_reinterpreted, case_http_roundtrip):
+               case_emphasis_reinterpreted, case_blind_new_format,
+               case_http_roundtrip):
         print(f"\n── {fn.__doc__.splitlines()[0]}")
         try:
             fn()

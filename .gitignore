@@ -11,3 +11,4 @@ fixtures/
 
 # 정리 전 원본 — 커밋 기록에 이미 남아 있어 따로 담지 않는다
 _backup_flat/
+out_blind/

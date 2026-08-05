@@ -98,7 +98,8 @@ def detect(sheet: Sheet) -> DetectedSchema:
     data_rows = [r for r in range(header_row + 1, sheet.height)
                  if not _row_is_blank(sheet, r)]
 
-    columns = _classify_columns(sheet, header_row, data_rows)
+    columns = _classify_columns(sheet, header_row, data_rows,
+                               find_scale_hint(sheet))
     schema = DetectedSchema(sheet.name, header_row, data_rows, columns, meta)
 
     # 데이터 방향 판정: 관계 열이 있고 이름이 반복되면 N응답 -> 1인
@@ -162,8 +163,8 @@ def _row_is_blank(sheet: Sheet, r: int) -> bool:
     return all(cell_is_blank(c) for c in sheet.row(r))
 
 
-def _classify_columns(sheet: Sheet, header_row: int,
-                      data_rows: List[int]) -> List[Column]:
+def _classify_columns(sheet: Sheet, header_row: int, data_rows: List[int],
+                      scale_hint: Optional[int] = None) -> List[Column]:
     header = sheet.row(header_row)
     columns: List[Column] = []
 
@@ -182,7 +183,8 @@ def _classify_columns(sheet: Sheet, header_row: int,
                 texts.append(t)
 
         # 분류는 두 줄을 합쳐서 본다 — 역할 힌트가 둘째 줄에 있을 수 있다
-        kind, conf, scale = _classify_one(f"{label} {desc}".strip(), values, texts)
+        kind, conf, scale = _classify_one(f"{label} {desc}".strip(), values, texts,
+                                          scale_hint)
         columns.append(Column(idx, label, kind, conf, scale, desc))
 
     # 이름 열이 라벨로 안 잡혔으면, 왼쪽에서 첫 번째 '짧은 문자열' 열을 후보로
@@ -198,7 +200,8 @@ def _classify_columns(sheet: Sheet, header_row: int,
     return columns
 
 
-def _classify_one(label: str, values: List, texts: List[str]):
+def _classify_one(label: str, values: List, texts: List[str],
+                  scale_hint: Optional[int] = None):
     """값의 성질을 먼저 보고, 그 다음에 라벨을 본다.
 
     순서가 중요하다. 라벨 힌트를 먼저 보면 역량명에 우연히 힌트 단어가 섞였을 때
@@ -220,9 +223,9 @@ def _classify_one(label: str, values: List, texts: List[str]):
         nums = [float(v) for v in values if looks_numeric(v)]
         # 평균란은 역량이 아니다. 점수에 섞으면 자기 자신이 평균에 들어간다.
         if any(h in low for h in SUMMARY_HINTS):
-            return SUMMARY, "high", _scale_of(nums)
+            return SUMMARY, "high", _scale_of(nums, scale_hint)
         conf = "high" if (label or QUESTION_ID.match(low)) else "medium"
-        return SCORE, conf, _scale_of(nums)
+        return SCORE, conf, _scale_of(nums, scale_hint)
 
     # 여기부터는 문자열 열이다
     if any(h in low for h in NAME_HINTS):
@@ -240,10 +243,53 @@ def _classify_one(label: str, values: List, texts: List[str]):
     return META, "medium", None
 
 
-def _scale_of(nums: List[float]) -> dict:
-    hi = 10 if max(nums) > 5 else 5
+# 실무에서 쓰이는 척도 상한. 관측 최댓값을 담는 가장 작은 것을 고른다.
+SCALE_CAPS = (5, 7, 10, 100)
+
+
+def _scale_of(nums: List[float], hint: Optional[int] = None) -> dict:
+    """점수 분포에서 척도를 추론한다.
+
+    5점과 10점만 알던 때는 7점 척도가 10점으로 잡혔다. 그러면 6.5점이
+    '10점 만점에 6.5'로 그려져 실제보다 낮아 보인다. 시트에 '7점 만점' 같은
+    문구가 있으면 그것을 먼저 믿고, 없으면 관측값으로 사다리를 탄다.
+    """
+    top = max(nums)
+    if hint and top <= hint:
+        cap = hint
+    else:
+        cap = next((c for c in SCALE_CAPS if top <= c), int(top))
+    floor = 0 if min(nums) < 1 else 1
     has_half = any(abs(n - round(n)) > 1e-9 for n in nums)
-    return {"min": 1, "max": hi, "step": 0.5 if has_half else 1}
+    return {"min": floor, "max": cap, "step": 0.5 if has_half else 1}
+
+
+# "7점 만점", "1~7점", "/10점", "10점 척도" 같은 표기
+SCALE_HINT = re.compile(
+    r"(?:(\d{1,3})\s*점\s*(?:만점|척도|기준))"
+    r"|(?:만점\s*[:：]?\s*(\d{1,3}))"
+    r"|(?:\d\s*[~\-–]\s*(\d{1,3})\s*점)"
+    r"|(?:/\s*(\d{1,3})\s*점)")
+
+
+def find_scale_hint(sheet: Sheet) -> Optional[int]:
+    """시트 어디든 적힌 '몇 점 만점'을 찾는다.
+
+    각주 행이나 머리부에 적어 두는 경우가 많다. 값 분포보다 신뢰도가 높다 —
+    모두가 5점 이하를 받은 7점 척도는 분포만으로는 5점 척도와 구분되지 않는다.
+    """
+    for r in range(sheet.height):
+        for cell in sheet.row(r):
+            text = cell.text
+            if "점" not in text:
+                continue
+            m = SCALE_HINT.search(text.replace(" ", ""))
+            if not m:
+                continue
+            value = next((int(g) for g in m.groups() if g), None)
+            if value and 2 <= value <= 100:
+                return value
+    return None
 
 
 # --------------------------------------------------------------------------

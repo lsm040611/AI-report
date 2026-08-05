@@ -117,6 +117,11 @@ def r15_resolve_person(card: dict, ctx: RuleContext) -> None:
     name, alias = person.get("name"), person.get("alias")
     ctxd = card.get("context", {})
 
+    if person.get("person_id"):
+        # 평가지 이름 칸에 사번이 함께 적혀 있던 경우 — 이미 신원 키가 있다
+        mark_applied(card, "R-15", "원본 사번 사용")
+        return
+
     if not roster:
         # 제공 데이터가 더미라 명부가 아직 없다(계약 '다음 단계 확인' 항목).
         add_flag(card, "roster_missing", NOTICE,

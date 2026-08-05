@@ -37,7 +37,7 @@ def _build_individual(sheet: Sheet, schema: DetectedSchema,
     for r in schema.data_rows:
         row = sheet.row(r)
         raw_name = row[name_col.index].text.strip() if name_col.index < len(row) else ""
-        name, alias = split_name(raw_name)
+        name, alias, emp_id = split_name(raw_name)
 
         scores = [{
             "area_name": col.header,
@@ -71,7 +71,7 @@ def _build_individual(sheet: Sheet, schema: DetectedSchema,
             "schema_version": SCHEMA_VERSION,
             "direction": "individual_row",
             "person": {"name": name, "alias": alias,
-                       "status": "regular", "person_id": None},
+                       "status": "regular", "person_id": emp_id},
             "context": dict(schema.meta),
             "scores": scores,
             "score_summary": score_summary,
@@ -101,7 +101,7 @@ def _build_aggregated(sheet: Sheet, schema: DetectedSchema,
         row = sheet.row(r)
         if name_col.index >= len(row):
             continue
-        name, _alias = split_name(row[name_col.index].text.strip())
+        name, _alias, _emp = split_name(row[name_col.index].text.strip())
         if not name:
             continue
         answers = {c.header: (row[c.index].value if c.index < len(row) else None)
@@ -225,23 +225,30 @@ def _note_text(row, schema: DetectedSchema) -> str:
                     if c.index < len(row))
 
 
-ALIAS = re.compile(r"^(?P<name>.+?)\s*[（(]\s*(?P<alias>[^)）]{1,24})\s*[)）]\s*$")
+ALIAS = re.compile(r"^(?P<name>.+?)\s*[（(]\s*(?P<extra>[^)）]{1,24})\s*[)）]\s*$")
+# 사번처럼 보이는 것 — 영문 접두 + 숫자, 또는 숫자만
+EMP_ID = re.compile(r"^(?:[A-Za-z]{1,3}[-_]?\d{3,}|\d{4,})$")
 
 
 def split_name(raw: str):
-    """'서준혁 (Aiden)' → ('서준혁', 'Aiden').
+    """'서준혁 (Aiden)' → ('서준혁', 'Aiden', None)
+       '임채원 (E20417)' → ('임채원', None, 'E20417')
 
-    영어 이름을 괄호로 병기하는 평가지가 많다. 그대로 두면 같은 사람이
-    회차마다 다른 이름이 되고(괄호 표기가 빠지면 매칭 실패), 리포트 제목도
-    '서준혁 (Aiden) 님' 이 된다.
+    괄호 안에 들어가는 것은 두 종류다 — 영어 이름 같은 별칭이거나, 사번이다.
+    사번을 별칭 자리에 넣으면 리포트 제목이 '임채원 님 E20417' 이 되고,
+    정작 R-15(동명이인 판정)가 쓸 수 있는 신원 키는 비어 있게 된다.
     """
     raw = (raw or "").strip()
     m = ALIAS.match(raw)
     if not m:
-        return raw, None
+        return raw, None, None
     name = m.group("name").strip()
-    alias = m.group("alias").strip()
-    return (name, alias) if name else (raw, None)
+    extra = m.group("extra").strip()
+    if not name:
+        return raw, None, None
+    if EMP_ID.match(extra):
+        return name, None, extra          # 사번 → person_id
+    return name, extra, None              # 그 밖 → 별칭
 
 
 def _guess_language(text: str) -> str:
