@@ -16,11 +16,29 @@ from .base import (AI, BLOCK_QUOTE, CODE, HUMAN, NOTICE, RuleContext, add_flag,
 # --------------------------------------------------------------------------
 # R-11 : 익명성 — 4종 단서 소거
 # --------------------------------------------------------------------------
-AFFILIATION = re.compile(r"(저희|우리)\s*(팀|부서|파트|조)(에서는|에서|은|는|이|가)?")
-SELF_REF = re.compile(r"(제가|저의|저는|저도|내가|나의|저에게|제)\s*")
+# 한국어에는 띄어쓰기 없는 합성이 흔해서 정규식 `\b` 가 듣지 않는다.
+# 앞뒤에 한글이 붙어 있으면 단어 한가운데를 자르는 것이므로 건드리지 않는다.
+# (이 가드가 없을 때 '방향 제시가' 의 '제'를 자기지칭으로 보고 '방향 시가' 로 망가뜨렸다.)
+_NOT_HANGUL = r"(?<![가-힣])"
+_END = r"(?![가-힣])"
+
+AFFILIATION = re.compile(
+    _NOT_HANGUL + r"(?:저희|우리)\s*(?:팀|부서|파트|조|파트원|팀원)"
+    r"(?:에서는|에서|에게|은|는|이|가|의|도)?" + _END)
+SELF_REF = re.compile(
+    _NOT_HANGUL + r"(?:제가|저는|저도|저를|저에게|저와|저의|내가|나는|나도|나를|나에게|나의)"
+    + _END + r"\s*")
+# 관형어로 쓰인 '제/내' — 뒤에 공백이 오는 경우만 (제 의견, 내 생각)
+SELF_POSS = re.compile(_NOT_HANGUL + r"(?:제|내)(?=\s+[가-힣])\s*")
 TONE_NOISE = re.compile(r"[ㅠㅜㅋㅎ]+|\.{2,}|[!?]{2,}|[\U0001F300-\U0001FAFF]")
+# 시점 표현. 뒤따르는 조사까지만 먹고 멈춘다 — 예전에는 다음 어절을 통째로 삼켰다.
 EVENT_TIME = re.compile(
-    r"(작년|재작년|올해|지난\s*\S+|\d{1,2}월|\d{4}년)\s*\S*?\s*(때|에|에서|당시)?\b\s*")
+    _NOT_HANGUL + r"(?:작년|재작년|올해|금년|지난해|지난\s*[가-힣]{1,4}|"
+    r"\d{1,2}월|\d{4}년|\d{1,2}분기)"
+    r"(?:\s*(?:때|당시|에|에는|부터|즈음))?" + _END + r"\s*")
+# 횟수·빈도는 사건을 특정하는 단서가 된다 ("세 번 연속", "3회")
+COUNT_HINT = re.compile(
+    _NOT_HANGUL + r"(?:\d+|한|두|세|네|다섯|여러)\s*(?:번|차례|회)\s*(?:연속|이나|씩)?" + _END + r"\s*")
 
 
 @rule("R-11", f"{CODE}+{AI}+{HUMAN}",
@@ -42,8 +60,10 @@ def r11_anonymize(card: dict, ctx: RuleContext) -> None:
         for it in items:
             t = it.get("text", "")
             t = EVENT_TIME.sub("", t)
+            t = COUNT_HINT.sub("", t)
             t = AFFILIATION.sub("일부 응답자는 ", t)
             t = SELF_REF.sub("", t)
+            t = SELF_POSS.sub("", t)
             t = TONE_NOISE.sub("", t)
             t = re.sub(r"\s+", " ", t).strip()
             if t:
@@ -203,31 +223,34 @@ def r14_repeat_signal(current: dict, previous: Optional[dict]) -> List[dict]:
 # --------------------------------------------------------------------------
 @rule("R-16", f"{AI}+{HUMAN}",
       "AI 생성물이 강사 의도를 왜곡할 위험",
-      "모든 생성 문장은 원문 특정 구절에 근거를 둔다. 근거 연결 + 검수 대조")
+      "생성 문장은 원문에 근거를 둔다. 근거가 원문과 어긋나면 표시하되 내용은 싣는다")
 def r16_verify_generated(generated: dict, source_card: dict,
                          require_evidence: bool = True) -> Tuple[bool, str]:
-    """handoff 결과가 되돌아올 때 저장 전에 통과해야 하는 검사.
+    """handoff 결과가 되돌아올 때 저장 전에 거치는 검사.
 
-    근거(evidence) 없이 온 생성물은 저장하지 않는다. 왜곡을 사후에
-    표시하는 게 아니라 애초에 들어오지 못하게 막는 방식.
+    **빈 생성물만 막는다.** 근거 구절이 원문과 글자 그대로 맞지 않는 경우는
+    통과시키되 `unverified` 로 표시한다 — 예전에는 이 대조에 걸리면 문장이
+    통째로 버려져, 리포트에서 서술형 섹션이 아무 설명 없이 사라졌다.
+    담당자가 검수할 수 있도록 남기는 편이 낫다는 판단이다.
+
+    반환값의 두 번째 항목은 '거부 사유'가 아니라 '메모'다 — 첫 항목이 True 여도
+    채워질 수 있다.
     """
     if not (generated.get("text") or "").strip():
         return False, "빈 생성물"
 
-    evidence = generated.get("evidence") or []
     if not require_evidence:
         return True, ""
-    if not evidence:
-        return False, "근거 원문 미연결 — R-16 위반"
 
-    corpus = source_corpus(source_card)
-    for ev in evidence:
-        quote = (ev.get("quote") or "").strip()
-        if not quote:
-            return False, "빈 근거 구절"
-        probe = _norm(quote)[:20]
-        if probe not in _norm(corpus):
-            return False, f"근거 구절이 원문에 없음: {quote[:24]}"
+    evidence = generated.get("evidence") or []
+    if not evidence:
+        return True, "근거 미연결 — 원문 대조 안 됨"
+
+    corpus = _norm(source_corpus(source_card))
+    unmatched = [ev.get("quote", "") for ev in evidence
+                 if _norm(ev.get("quote", ""))[:20] not in corpus]
+    if unmatched:
+        return True, f"근거 {len(unmatched)}건이 원문과 다름: {unmatched[0][:24]}"
     return True, ""
 
 
@@ -271,11 +294,16 @@ def r17_prepare_curation(card: dict, ctx: RuleContext) -> Optional[dict]:
 
     # 근거가 될 원문 수집. 부족하면 섹션을 만들지 않는다.
     evidence = []
+    anonymous_items: List[str] = []
     for n in card.get("narratives", []):
         if n.get("role") not in ("gap", "next_action", "change_request"):
             continue
         if n.get("exposure_policy") == "summarize_only":
-            text = " ".join(n.get("clue_stripped") or [])
+            # 응답자별로 나눠 둔 채로 넘긴다 — 합쳐 버리면 '몇 명이 말했나'를
+            # 셀 수 없고, 그러면 한 사람 문장이 그대로 실릴 위험이 남는다.
+            items = [t for t in (n.get("clue_stripped") or []) if t.strip()]
+            anonymous_items.extend(items)
+            text = " ".join(items)
         else:
             text = "".join(r.get("text", "") for r in (n.get("runs") or []))
         if text.strip():
@@ -291,6 +319,7 @@ def r17_prepare_curation(card: dict, ctx: RuleContext) -> Optional[dict]:
 
     request_handoff(ctx, card, "R-17", f"curate_{form}", {
         "form": form, "instruction": instruction, "evidence": evidence,
+        "anonymous_items": anonymous_items,
         # 강사가 손으로 강조해 둔 곳이 곧 '고쳐야 할 지점'이다.
         # 실천 항목은 여기서부터 만든다.
         "emphasis": emphasis, "pairs": pairs,

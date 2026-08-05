@@ -15,7 +15,10 @@ from typing import Dict, List, Optional
 
 from config import EFFORT, MODEL, USE_LLM
 
+from tone import is_formal, josa, polish
+
 from . import prompts
+from .themes import anonymous_lines, common_themes
 
 _client = None
 
@@ -134,14 +137,55 @@ def _mock(rule_id: str, task: str, payload: dict) -> Dict[str, object]:
 
 
 def _mock_r11(payload: dict) -> Dict[str, object]:
-    items: List[str] = [t for t in payload.get("items", []) if t.strip()]
-    picked = sorted(items, key=len, reverse=True)[:2]
+    """주관식 종합 (목 모드).
+
+    **응답 문장을 그대로 옮기지 않는다.** 단서를 지워도 문장에는 그 사람의
+    말버릇과 겪은 사건이 남아 작성자가 특정된다.
+
+    여러 명이 공통으로 말한 주제가 있으면 그것을 쓴다 — 가장 안전하고, 여러
+    명이 같은 말을 했다는 사실 자체가 정보다. 공통 주제가 없으면 억지로
+    만들지 않고 **한 줄씩 나열한다.** 다만 나열도 익명이어야 해서 인용된
+    대사·말버릇을 한 번 더 걷어내고 순서를 다시 늘어놓는다.
+    """
+    items = [t for t in payload.get("items", []) if t.strip()]
+    min_common = int(payload.get("min_common") or 2)
+    if not items:
+        return {"text": "", "evidence": [], "error": "응답 없음"}
+
+    picked = common_themes(items, min_docs=min_common, top=3) if len(items) >= min_common else []
+    if not picked:
+        return _mock_r11_listed(items, payload.get("role"))
+
+    # 목 모드는 뜻을 이해하지 못하므로 '무엇을 하라'까지는 쓰지 않는다.
+    # 주제어와 인원수만 담백하게 적는다 — 없는 판단을 지어내지 않기 위해서다.
+    role = payload.get("role")
+    frame = ("<b>{w}</b> 부분이 강점으로 {n}명의 응답에서 공통으로 언급됨."
+             if role == "strength" else
+             "<b>{w}</b> 부분에 대한 보완 요청이 {n}명의 응답에서 공통으로 언급됨.")
+
     lines, evidence = [], []
     for t in picked:
-        head = _first_clause(t)
-        lines.append(f"<b>{head}</b> 같은 의견이 응답에 담겼습니다.")
-        evidence.append({"quote": t, "why": "응답 원문"})
+        word, n = t["word"], t["docs"]
+        lines.append(frame.format(w=word, n=n))
+        quote = next((s for s in items if word in s), items[0])
+        evidence.append({"quote": quote, "why": f"{n}명이 공통으로 언급한 주제"})
     return {"text": "\n".join(lines), "evidence": evidence}
+
+
+def _mock_r11_listed(items: List[str], role: str = None) -> Dict[str, object]:
+    """공통 주제가 없을 때 — 한 줄씩 나열한다.
+
+    나열이라고 원문 그대로는 아니다. `anonymous_lines` 로 대사·말버릇을 걷어내고
+    가나다순으로 다시 늘어놓은 뒤, 말투까지 리포트 전체와 맞춘다. 몇 명이 썼는지는
+    적지 않는다 — 응답 수가 적을 때 그 숫자 자체가 사람을 좁힌다.
+    """
+    lines = anonymous_lines(items, limit=5)
+    if not lines:
+        return {"text": "", "evidence": [], "error": "쓸 수 있는 응답이 없습니다"}
+    return {
+        "text": "\n".join(polish(s) for s in lines),
+        "evidence": [{"quote": s, "why": "응답 원문(단서 소거 후)"} for s in lines],
+    }
 
 
 def _mock_r17(payload: dict) -> Dict[str, object]:
@@ -151,6 +195,12 @@ def _mock_r17(payload: dict) -> Dict[str, object]:
     그대로 옮기는 편이 서술 전체를 요약하는 것보다 정확하고, 사람마다 말투가
     달라지지도 않는다. 강조가 하나도 없을 때만 서술 문장으로 내려간다.
     """
+    # 진단서베이에는 강조가 없다. 대신 익명 처리된 응답이 들어오는데,
+    # 이건 사람마다 문장이 달라 그대로 실으면 작성자가 드러난다.
+    anon = payload.get("anonymous_items")
+    if anon:
+        return _mock_r17_anonymous(anon, int(payload.get("min_common") or 2))
+
     lines: List[str] = []
     evidence: List[dict] = []
     used = set()
@@ -165,7 +215,7 @@ def _mock_r17(payload: dict) -> Dict[str, object]:
     # ① 교정 쌍 — "이렇게 말고 → 이렇게"
     for p in payload.get("pairs") or []:
         issue, fix = p["issue"], p["fix"]
-        add(f"<b>{issue}</b> 대신 <b>{fix}</b>{_josa(fix, '을', '를')} 씁니다.",
+        add(f"<b>{issue}</b> 대신 <b>{fix}</b>{josa(fix, '을', '를')} 씁니다.",
             fix, "강사가 밑줄로 표시한 권장 표현")
 
     spans = payload.get("emphasis") or []
@@ -182,7 +232,7 @@ def _mock_r17(payload: dict) -> Dict[str, object]:
     for s in spans:
         if s["kind"] == "key":
             t = s["text"]
-            add(f"<b>{t}</b>{_josa(t, '을', '를')} 염두에 두고 준비합니다.",
+            add(f"<b>{t}</b>{josa(t, '을', '를')} 염두에 두고 준비합니다.",
                 t, "강사가 굵게 표시한 핵심 개념")
 
     # ④ 짝 없는 '고칠 표현'
@@ -197,10 +247,28 @@ def _mock_r17(payload: dict) -> Dict[str, object]:
         actions = [e for e in ev if e.get("role") == "next_action"] or ev
         for e in actions:
             for sent in _pick_sentences(e.get("quote") or ""):
-                add(_polish(sent), sent, "강사 코멘트 원문")
+                add(polish(sent), sent, "강사 코멘트 원문")
 
     if not lines:
         return {"text": "", "evidence": []}
+    return {"text": "\n".join(lines), "evidence": evidence}
+
+
+def _mock_r17_anonymous(items: List[str], min_common: int = 2) -> Dict[str, object]:
+    """진단서베이용 실천 항목 — 공통 주제어만으로 만든다.
+
+    한 사람의 요청을 실천 항목으로 올리면 "저건 누가 쓴 말이다"가 바로 짚인다.
+    두 명 이상이 말한 주제만 쓰면 그 연결이 끊긴다.
+    """
+    picked = common_themes(items, min_docs=min_common, top=3)
+    if not picked:
+        return {"text": "", "evidence": []}
+    lines, evidence = [], []
+    for t in picked:
+        word = t["word"]
+        lines.append(f"{word}{josa(word, '을', '를')} 주제로 팀과 이야기할 자리를 한 번 만듭니다.")
+        quote = next((s for s in items if word in s), items[0])
+        evidence.append({"quote": quote, "why": f"{t['docs']}명이 공통으로 언급한 주제"})
     return {"text": "\n".join(lines), "evidence": evidence}
 
 
@@ -223,95 +291,6 @@ def _pick_sentences(text: str, limit: int = 2) -> List[str]:
     ranked = sorted(parts, key=lambda s: (not s.rstrip(". ").endswith(_REQUEST_TAIL),
                                           len(s)))
     return [s[:110].strip() for s in ranked[:limit]]
-
-
-def _josa(word: str, with_batchim: str, without_batchim: str) -> str:
-    """받침에 따라 조사를 고른다. '설득력을' / '레버리지를' 처럼.
-
-    영어 표현도 읽히는 소리를 기준으로 판단한다 — hedging 은 '헤징'이라 받침이
-    있고(을), understand 는 '언더스탠드'라 받침이 없다(를).
-    """
-    w = (word or "").strip().rstrip('"\'”’)]…. ').strip()
-    if not w:
-        return without_batchim
-    ch = w[-1]
-    if "가" <= ch <= "힣":
-        return with_batchim if (ord(ch) - 0xAC00) % 28 else without_batchim
-    low = w.lower()
-    if low.endswith("ng") or low[-1] in "nlmr":
-        return with_batchim          # 헤징 / 퍼슈에이전 / 툴 — 받침으로 끝남
-    return without_batchim
-
-
-# 강사가 쓰는 명령형 어미를 '~합니다' 로 통일한다. 리포트 안에서 말투가
-# 항목마다 달라지면 누가 쓴 문장인지가 드러나 읽는 흐름이 끊긴다.
-_ENDINGS = [
-    # 강사가 쓰는 명령형
-    (r"해\s*볼\s*것$", "해 봅니다"), (r"어\s*볼\s*것$", "어 봅니다"),
-    (r"볼\s*것$", "봅니다"), (r"할\s*것$", "합니다"), (r"쓸\s*것$", "씁니다"),
-    (r"낼\s*것$", "냅니다"), (r"들\s*것$", "듭니다"), (r"칠\s*것$", "칩니다"),
-    (r"줄\s*것$", "줍니다"), (r"둘\s*것$", "둡니다"), (r"익힐\s*것$", "익힙니다"),
-    (r"말\s*것$", "않습니다"),
-    # 명사형 어미
-    (r"하기$", "합니다"), (r"기$", "습니다"),
-    # 축약된 서술격 조사 — '필수다' 는 '필숩니다' 가 아니라 '필수입니다'
-    (r"아니다$", "아닙니다"), (r"이다$", "입니다"), (r"하다$", "합니다"),
-    # 동료·구성원이 쓰는 요청형 (진단서베이)
-    (r"지\s*말아\s*주세요$", "지 않습니다"), (r"지\s*마세요$", "지 않습니다"),
-    (r"해\s*주시면\s*좋겠습니다$", "합니다"), (r"주시면\s*좋겠습니다$", "합니다"),
-    (r"해\s*주세요$", "합니다"), (r"주세요$", "줍니다"),
-]
-
-
-def _polish(sentence: str) -> str:
-    """말투를 '~합니다' 로 맞추고 문장부호를 정리한다."""
-    s = (sentence or "").strip().rstrip(" .")
-    if not s:
-        return ""
-    for pattern, repl in _ENDINGS:
-        new = re.sub(pattern, repl, s)
-        if new != s:
-            return new + "."
-    # 명사로 끝나는 과제("…되묻는 연습")는 서술어를 붙여 준다
-    for noun in _ACTION_NOUNS:
-        if s.endswith(noun):
-            return f"{s}{_josa(s, '을', '를')} 합니다."
-    return _to_formal(s) + "."
-
-
-# 강사가 과제를 명사로만 적어 두는 경우가 많다
-_ACTION_NOUNS = ("연습", "정리", "준비", "작성", "점검", "확인", "메모",
-                 "요약", "공유", "기록", "복습", "훈련")
-
-
-def _is_formal(s: str) -> bool:
-    return s.rstrip().rstrip(".").endswith(("니다", "세요"))
-
-
-def _to_formal(s: str) -> str:
-    """강사 메모체('~다')를 존댓말('~합니다')로 바꾼다.
-
-    강사는 평가지에 '톤이 급해졌다', '연습이 필요하다' 처럼 적는다. 그대로 실으면
-    리포트 안에서 문장마다 말투가 달라진다. 한국어 어미 규칙이라 표로 다 적을 수
-    없어 받침으로 판단한다 — 받침이 없으면 ㅂ을 붙이고(하다→합니다), ㄴ이면
-    ㅂ으로 바꾸고(한다→합니다), 그 밖에는 '습니다'를 붙인다(있다→있습니다).
-    """
-    if s.endswith("니다") or not s.endswith("다"):
-        return s
-    if s.endswith("는다"):                       # 먹는다 → 먹습니다
-        return s[:-2] + "습니다"
-    stem = s[-2] if len(s) >= 2 else ""
-    if not ("가" <= stem <= "힣"):
-        return s
-    code = ord(stem) - 0xAC00
-    jong = code % 28
-    if jong == 0:
-        # 받침 없는 어간에 붙은 '다'는 대개 명사 뒤의 서술격 조사다
-        # ('필수다' → '필수입니다'). 동사형('하다')은 위 표에서 먼저 걸러진다.
-        return s[:-1] + "입니다"
-    if jong == 4:                                # 한다 → 합니다 / 온다 → 옵니다
-        return s[:-2] + chr(0xAC00 + code - 4 + 17) + "니다"
-    return s[:-1] + "습니다"                      # 급해졌다 → 급해졌습니다
 
 
 def _mock_memorize(payload: dict) -> Dict[str, object]:
@@ -373,7 +352,7 @@ def _mock_gap(payload: dict) -> Dict[str, object]:
         p = pairs[0]
         sentences.append(
             f"<b>{p['issue']}</b>처럼 말한 장면이 있었고, 같은 자리에 "
-            f"<b>{p['fix']}</b>{_josa(p['fix'], '을', '를')} 넣으면 "
+            f"<b>{p['fix']}</b>{josa(p['fix'], '을', '를')} 넣으면 "
             f"메시지가 훨씬 부드럽게 전달됩니다.")
         evidence.append({"quote": p["fix"], "why": "강사가 밑줄로 표시한 권장 표현"})
     else:
@@ -382,17 +361,17 @@ def _mock_gap(payload: dict) -> Dict[str, object]:
         issue = next((s for s in spans if s["kind"] == "issue"), None)
         if fix:
             sentences.append(
-                f"강사가 짚어 준 <b>{fix['text']}</b>{_josa(fix['text'], '을', '를')} "
+                f"강사가 짚어 준 <b>{fix['text']}</b>{josa(fix['text'], '을', '를')} "
                 f"의식적으로 쓰면 같은 내용이 더 분명하게 전달됩니다.")
             evidence.append({"quote": fix["text"], "why": "권장 표현"})
         elif key:
             sentences.append(
-                f"<b>{key['text']}</b>{_josa(key['text'], '이', '가')} 이번 회차의 "
+                f"<b>{key['text']}</b>{josa(key['text'], '이', '가')} 이번 회차의 "
                 f"핵심으로 짚혔고, 이 관점이 결과 차이를 만듭니다.")
             evidence.append({"quote": key["text"], "why": "핵심 개념"})
         elif issue:
             sentences.append(
-                f"<b>{issue['text']}</b>{_josa(issue['text'], '이', '가')} 반복되면 "
+                f"<b>{issue['text']}</b>{josa(issue['text'], '이', '가')} 반복되면 "
                 f"의도와 다르게 받아들여질 수 있습니다.")
             evidence.append({"quote": issue["text"], "why": "고칠 표현"})
 
@@ -402,8 +381,8 @@ def _mock_gap(payload: dict) -> Dict[str, object]:
         picked = _in_order(payload.get("gap_text") or "", limit=3)
         # 말투를 맞출 수 없는 메모 조각("Q&A 준비 부족 — 3회")은 문단에 넣지 않는다.
         # 한 문단 안에서 문장 하나만 말투가 다르면 오히려 더 눈에 띈다.
-        usable = [(s, _polish(s)) for s in picked]
-        usable = [(s, p) for s, p in usable if _is_formal(p)] or usable[:1]
+        usable = [(s, polish(s)) for s in picked]
+        usable = [(s, p) for s, p in usable if is_formal(p)] or usable[:1]
         if not usable:
             return {"text": "", "evidence": []}
         for sent, polished in usable[:2]:

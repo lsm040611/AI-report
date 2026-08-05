@@ -247,7 +247,7 @@ def case_gap_comment_rewrite():
 
 def case_tone_normalisation():
     """강사 메모체·요청형이 존댓말로 통일되는지."""
-    from generation.worker import _polish
+    from tone import polish as _polish
 
     cases = {
         "상대 반론 이후 톤이 급해졌다": "상대 반론 이후 톤이 급해졌습니다.",

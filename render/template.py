@@ -631,11 +631,13 @@ def _todo(s: dict) -> str:
 
 
 def _legend(s: dict) -> str:
-    items = [
-        '<span class="it"><em class="bad">고칠 표현</em> 고쳐야 할 표현</span>',
-        '<span class="it"><em class="fix">권장 표현</em> 대신 쓸 표현</span>',
-        '<span class="it"><em class="key">핵심 개념</em> 기억할 개념</span>',
-    ]
+    items = []
+    if s.get("showMarks", True):
+        items += [
+            '<span class="it"><em class="bad">고칠 표현</em> 고쳐야 할 표현</span>',
+            '<span class="it"><em class="fix">권장 표현</em> 대신 쓸 표현</span>',
+            '<span class="it"><em class="key">핵심 개념</em> 기억할 개념</span>',
+        ]
     if s.get("showDelta"):
         items.append('<span class="it"><span class="delta p">▲ 상승</span> · '
                      '<span class="delta z">― 유지</span> · '

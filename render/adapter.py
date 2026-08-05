@@ -77,8 +77,14 @@ def to_presentation_card(card: dict,
     # 암기 문장 카드가 있으면 그것이 곧 실천 항목이다 — 같은 말을 두 번 쓰지 않는다
     memorize = _memorize(card, stype, repeat)
     sections.append(memorize or _todo(card, stype))
-    sections.append({"kind": "legend", "compact": True,
-                     "showDelta": bool(growth and growth.get("status") == "compared")})
+    # 범례는 강사가 색·굵기로 표시한 것이 실제로 있을 때만 쓸모가 있다.
+    # 진단서베이는 강조 표기가 아예 없어서 '고칠 표현 / 권장 표현 / 핵심 개념'
+    # 설명만 덩그러니 남는다 — 없는 표기를 설명하는 꼴이라 뺀다.
+    delta = bool(growth and growth.get("status") == "compared")
+    marks = bool(_emphasis_kinds(card))
+    if marks or delta:
+        sections.append({"kind": "legend", "compact": True,
+                         "showMarks": marks, "showDelta": delta})
 
     lines = [f'이 리포트는 {person.get("name")} 님 본인에게만 발송되었습니다.']
     if contact:

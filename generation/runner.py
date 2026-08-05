@@ -52,6 +52,29 @@ def drain(db: Session, upload_id: Optional[int] = None,
             result, card.card_json, require_evidence=h.rule_id in EVIDENCE_REQUIRED)
 
         h.result = result
+        if ok:
+            if reason:                       # 통과했지만 대조가 어긋난 건
+                result = {**result, "unverified": reason}
+                h.result = result
+            # 한 건이 터져도 나머지는 살린다. 예전에는 중간에 예외가 나면
+            # 그때까지의 처리가 통째로 롤백되어 큐가 손도 안 댄 상태로 남았다.
+            try:
+                _commit_one(db, h, card, result, operator, auto_accept, retagged)
+                accepted += 1 if auto_accept else 0
+            except Exception as exc:                       # noqa: BLE001
+                db.rollback()
+                h = db.get(Handoff, h.id)
+                if h is not None:
+                    h.status = "rejected"
+                    h.reject_reason = f"저장 실패 — {type(exc).__name__}: {exc}"
+                    db.commit()
+                rejected += 1
+                rejects.append({"handoff_id": h.id if h else None,
+                                "rule_id": h.rule_id if h else "",
+                                "person": card.person_name,
+                                "reason": f"저장 실패 — {type(exc).__name__}: {exc}"})
+            continue
+
         if not ok:
             h.status = "rejected"
             # 워커가 이유를 알고 있으면 그쪽이 담당자에게 더 쓸모 있다
@@ -62,19 +85,22 @@ def drain(db: Session, upload_id: Optional[int] = None,
                             "reason": h.reject_reason})
             continue
 
-        h.status = "returned"
-        h.reject_reason = None
-        if auto_accept:
-            _accept(db, h, card, result, operator)
-            accepted += 1
-            if h.rule_id in PRIORITY_RULES:
-                retagged.add(h.card_id)
-                db.flush()
-
     db.commit()
     return {"processed": processed, "accepted": accepted,
             "rejected": rejected, "rejects": rejects,
             "engine": worker.engine_name()}
+
+
+def _commit_one(db: Session, h: Handoff, card: Card, result: dict,
+                operator: str, auto_accept: bool, retagged: set) -> None:
+    """한 건을 반영하고 바로 커밋한다 — 실패가 앞의 성공을 되돌리지 않도록."""
+    h.status = "returned"
+    h.reject_reason = None
+    if auto_accept:
+        _accept(db, h, card, result, operator)
+        if h.rule_id in PRIORITY_RULES:
+            retagged.add(h.card_id)
+    db.commit()
 
 
 # --------------------------------------------------------------------------
@@ -200,6 +226,11 @@ def _apply_mapping(db: Session, data: dict, payload: dict,
         if (item.get("area_name") or "").strip() == raw:
             item["canonical_area"] = canonical
 
+    # 같은 큐 안에서 같은 역량이 여러 번 올라온다 — 진단서베이는 피평가자 3명이
+    # 문항을 그대로 공유하므로 Q1 매핑 요청이 3건 생긴다. 아래 조회는 아직
+    # flush 되지 않은 행을 보지 못해서, 그대로 두면 두 번째 저장에서
+    # UNIQUE 제약이 터지고 **드레인 전체가 롤백**된다(생성물이 통째로 사라진다).
+    db.flush()
     row = (db.query(CompetencyMapping)
              .filter(CompetencyMapping.raw_name == raw).one_or_none())
     if row:
