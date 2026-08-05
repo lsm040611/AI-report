@@ -51,15 +51,43 @@ class MailConfig:
 
     def why_not(self) -> str:
         if not self.enabled:
-            return "HR_MAIL_ENABLED 가 꺼져 있습니다"
+            return "mail.env 의 HR_MAIL_ENABLED 가 꺼져 있습니다"
         missing = [n for n, v in (("HR_SMTP_HOST", self.host),
                                   ("HR_SMTP_USER", self.user),
                                   ("HR_SMTP_PASS", self.password)) if not v]
-        return f"환경변수 {', '.join(missing)} 가 없습니다" if missing else ""
+        if missing:
+            return f"mail.env 에 {', '.join(missing)} 값을 채워 주십시오"
+        return ""
+
+
+# 계정 정보를 적어 두는 파일. 이 폴더에 있고, .gitignore 로 커밋에서 빠진다.
+SECRET_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mail.env")
+
+
+def _load_secret_file() -> None:
+    """mail.env 를 읽어 환경변수에 채운다. 이미 있는 값은 건드리지 않는다.
+
+    켤 때마다 아이디·비밀번호를 묻지 않으려고 파일로 둔다. 환경변수를 직접
+    설정한 경우에는 그쪽이 이긴다 — 발표장에서 잠깐 다른 계정으로 바꾸기 쉽다.
+    """
+    try:
+        with open(SECRET_FILE, encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        if key and value and not os.getenv(key):
+            os.environ[key] = value
 
 
 def config() -> MailConfig:
     """환경변수를 읽는다. 기본값은 네이버 SMTP 다 (샘플 주소가 네이버라서)."""
+    _load_secret_file()
     user = os.getenv("HR_SMTP_USER", "").strip()
     port = int(os.getenv("HR_SMTP_PORT", "587"))
     host = os.getenv("HR_SMTP_HOST", "smtp.naver.com")
