@@ -60,14 +60,25 @@ class MailConfig:
 
 def config() -> MailConfig:
     """환경변수를 읽는다. 기본값은 네이버 SMTP 다 (샘플 주소가 네이버라서)."""
-    user = os.getenv("HR_SMTP_USER", "")
+    user = os.getenv("HR_SMTP_USER", "").strip()
     port = int(os.getenv("HR_SMTP_PORT", "587"))
+    host = os.getenv("HR_SMTP_HOST", "smtp.naver.com")
+
+    # 네이버·구글은 로그인 아이디와 보내는 주소가 다르게 적힌다.
+    # 아이디만 넣어도 보내는 주소가 만들어지도록 도메인을 붙여 준다.
+    sender = os.getenv("HR_MAIL_FROM", "").strip() or user
+    if sender and "@" not in sender:
+        domain = {"smtp.naver.com": "naver.com",
+                  "smtp.gmail.com": "gmail.com"}.get(host)
+        if domain:
+            sender = f"{sender}@{domain}"
+
     return MailConfig(
-        host=os.getenv("HR_SMTP_HOST", "smtp.naver.com"),
+        host=host,
         port=port,
         user=user,
         password=os.getenv("HR_SMTP_PASS", ""),
-        sender=os.getenv("HR_MAIL_FROM", user),
+        sender=sender,
         sender_name=os.getenv("HR_MAIL_FROM_NAME", "HRD 피드백"),
         use_ssl=port == 465,
         enabled=_flag("HR_MAIL_ENABLED", "0"),
