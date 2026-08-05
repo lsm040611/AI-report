@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
+import mailer
 from database import get_db
 from models import Card, Report
 from pipeline.rules.base import RuleContext, is_sendable, quote_allowed
@@ -101,6 +102,68 @@ def report_html(report_id: int, db: Session = Depends(get_db)):
     if not report:
         raise HTTPException(404, "리포트 없음")
     return HTMLResponse(render(report.body["presentation"]))
+
+
+@router.get("/mail/status")
+def mail_status():
+    """발송 준비가 됐는지. 화면이 버튼 옆에 이 상태를 띄운다."""
+    return mailer.status()
+
+
+@router.post("/{report_id}/send")
+def send_report(report_id: int, db: Session = Depends(get_db)):
+    """리포트를 **본인 주소로만** 보낸다.
+
+    주소는 평가지에 적힌 그 사람의 것만 쓴다. 받는 사람을 밖에서 지정할 수
+    없게 한 것은 실수 한 번으로 남의 피드백이 가는 일을 막기 위해서다.
+    """
+    report = db.get(Report, report_id)
+    if not report:
+        raise HTTPException(404, "리포트 없음")
+    card = db.get(Card, report.card_id)
+    if not card:
+        raise HTTPException(404, "카드 없음")
+
+    person = (card.card_json.get("person") or {})
+    to = person.get("email")
+    if not mailer.valid(to):
+        raise HTTPException(400, f"{person.get('name')} 님의 평가지에 이메일이 없습니다")
+
+    context = card.card_json.get("context") or {}
+    program = context.get("program") or context.get("과정명") or "피드백 리포트"
+    subject = f"[{program}] {person.get('name')} 님 개인 피드백 리포트"
+
+    result = mailer.send(to, subject, render(report.body["presentation"]))
+    if result.get("sent"):
+        report.sent_at = dt.datetime.utcnow()
+        db.commit()
+    return {"report_id": report.id, "person": person.get("name"), **result}
+
+
+@router.post("/send/upload/{upload_id}")
+def send_upload(upload_id: int, db: Session = Depends(get_db)):
+    """한 파일에서 나온 리포트를 사람마다 자기 주소로 보낸다."""
+    cards = db.query(Card).filter(Card.upload_id == upload_id).all()
+    if not cards:
+        raise HTTPException(404, "업로드 없음")
+
+    results = []
+    for card in cards:
+        report = db.query(Report).filter(Report.card_id == card.id).one_or_none()
+        person = (card.card_json.get("person") or {})
+        if report is None:
+            results.append({"person": person.get("name"), "sent": False,
+                            "reason": "리포트가 아직 없습니다"})
+            continue
+        try:
+            results.append(send_report(report.id, db))
+        except HTTPException as exc:
+            results.append({"person": person.get("name"), "sent": False,
+                            "reason": exc.detail})
+
+    sent = sum(1 for r in results if r.get("sent"))
+    return {"upload_id": upload_id, "sent": sent,
+            "total": len(results), "mail": mailer.status(), "results": results}
 
 
 @router.post("/{report_id}/review")

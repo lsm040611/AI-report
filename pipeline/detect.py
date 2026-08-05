@@ -16,6 +16,9 @@ from .reader import Sheet, cell_is_blank, looks_numeric
 
 NAME_HINTS = ["이름", "성명", "참가자", "name", "피평가자", "대상자", "수강생"]
 NOTE_HINTS = ["비고", "note", "remark", "특이사항"]
+EMAIL_HINTS = ["이메일", "메일", "email", "e-mail", "mail"]
+# 주소는 라벨이 없어도 모양으로 알아본다 — 라벨이 '연락처'일 수도 있기 때문이다
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
 
 # 관계 열만은 부분 일치로 잡지 않는다.
 # "관계"를 부분 일치로 두면 '이해관계 파악' 같은 역량명이 관계 열로 오인되어
@@ -27,6 +30,7 @@ RELATION_EXACT = {
 SUMMARY_HINTS = ["평균", "average", "총점", "합계", "total", "종합"]
 QUESTION_ID = re.compile(r"^Q\s*\d+$", re.IGNORECASE)
 
+EMAIL = "email"            # 리포트를 보낼 주소
 SCORE = "score"
 SUMMARY = "summary"        # 원본 평균란 — 역량이 아니므로 점수에 섞지 않는다
 NARRATIVE = "narrative"
@@ -227,7 +231,14 @@ def _classify_one(label: str, values: List, texts: List[str],
         conf = "high" if (label or QUESTION_ID.match(low)) else "medium"
         return SCORE, conf, _scale_of(nums, scale_hint)
 
-    # 여기부터는 문자열 열이다
+    # 여기부터는 문자열 열이다.
+    # 이메일이 먼저다 — 주소는 20자 안팎이라 그냥 두면 아래 길이 규칙에서
+    # 서술 칸으로 잡혀 통째로 사라진다. 실제로 그렇게 사라지고 있었다.
+    if texts and sum(1 for t in texts if EMAIL_RE.match(t.strip())) / len(texts) >= 0.6:
+        return EMAIL, "high", None
+    if any(h in low for h in EMAIL_HINTS):
+        return EMAIL, "medium", None
+
     if any(h in low for h in NAME_HINTS):
         return NAME, "high", None
     if flat in RELATION_EXACT:

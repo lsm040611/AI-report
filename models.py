@@ -86,6 +86,7 @@ class Report(Base):
     body: Mapped[Any] = mapped_column(JSON)
     reviewed_by: Mapped[Optional[str]] = mapped_column(String(64))
     reviewed_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime)
+    sent_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime)   # 메일 발송 시각
     card: Mapped["Card"] = relationship(back_populates="report")
 
 

@@ -175,7 +175,30 @@ function showFile(i){
     '<div class=row><span class=nm>'+esc(x.name)+'</span>'+
     (x.report_id? '<a href="'+x.html+'" target=_blank>리포트 열기 ↗</a>'
                 : '<span class=blk>'+esc(x.blocked_by)+'</span>')+'</div>').join('');
-  list.innerHTML=rows||'<p class=blk>이 파일에서 만들어진 리포트가 없습니다.</p>';
+  let h=rows||'<p class=blk>이 파일에서 만들어진 리포트가 없습니다.</p>';
+  if(u.upload_id) h+='<div class=row><button id=send data-u="'+u.upload_id+'">'+
+      '본인 메일로 보내기</button><span id=sendmsg class=blk></span></div>';
+  list.innerHTML=h;
+  const b=document.getElementById('send');
+  if(b) b.onclick=()=>sendMail(b);
+}
+
+// 발송은 버튼을 눌러야만 나간다. 업로드만으로는 아무에게도 가지 않는다.
+async function sendMail(b){
+  const msg=document.getElementById('sendmsg');
+  b.disabled=true; msg.textContent=' 보내는 중…';
+  try{
+    const r=await fetch('/reports/send/upload/'+b.dataset.u,{method:'POST'});
+    const d=await r.json();
+    if(!r.ok){ msg.textContent=' '+(d.detail||'실패'); return; }
+    const dry=(d.results||[]).some(x=>x.dry_run);
+    msg.textContent=dry
+      ? ' 미리보기 — '+(d.mail&&d.mail.note||'')+' (실제로 보내지 않았습니다)'
+      : ' '+d.sent+'/'+d.total+'명에게 보냈습니다';
+    const bad=(d.results||[]).filter(x=>!x.sent&&!x.dry_run);
+    if(bad.length) msg.textContent+=' · 실패 '+bad.length+'건: '+esc(bad[0].reason||'');
+  }catch(e){ msg.textContent=' '+e; }
+  finally{ b.disabled=false; }
 }
 </script></body></html>
 """

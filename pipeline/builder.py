@@ -10,7 +10,7 @@ import re
 from collections import defaultdict
 from typing import Dict, List, Optional
 
-from .detect import (NAME, NARRATIVE, NOTE, RELATION, SCORE, SUMMARY,
+from .detect import (EMAIL, EMAIL_RE, NAME, NARRATIVE, NOTE, RELATION, SCORE, SUMMARY,
                      DetectedSchema)
 from .reader import Sheet, looks_numeric
 from .rules import report, semantic, structural, survey
@@ -67,10 +67,20 @@ def _build_individual(sheet: Sheet, schema: DetectedSchema,
                 score_summary["original_average"] = raw
                 score_summary["original_cell"] = row[summary_col.index].coord
 
+        # 평가지에 주소 열이 있으면 그대로 싣는다. 없으면 None 이고,
+        # 발송 기능은 주소가 있는 카드에서만 동작한다.
+        email = None
+        for col in schema.by_kind(EMAIL):
+            if col.index < len(row):
+                candidate = row[col.index].text.strip()
+                if EMAIL_RE.match(candidate):
+                    email = candidate
+                    break
+
         card = {
             "schema_version": SCHEMA_VERSION,
             "direction": "individual_row",
-            "person": {"name": name, "alias": alias,
+            "person": {"name": name, "alias": alias, "email": email,
                        "status": "regular", "person_id": emp_id},
             "context": dict(schema.meta),
             "scores": scores,
