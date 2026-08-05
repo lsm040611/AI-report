@@ -68,10 +68,15 @@ def generate(rule_id: str, task: str, payload: dict) -> Dict[str, object]:
 
 
 def _call(client, user_prompt: str, schema: dict) -> Optional[dict]:
-    """Claude 호출. 구조화 출력으로 스키마를 강제한다."""
+    """Claude 호출. 구조화 출력으로 스키마를 강제한다.
+
+    max_tokens 는 생각(thinking)과 응답 글자를 **합쳐서** 자른다. 이 모델은
+    생각이 기본으로 켜져 있어서, 넉넉히 잡지 않으면 JSON 이 중간에서 잘리고
+    파싱 실패로 조용히 목 모드로 떨어진다.
+    """
     kwargs = dict(
         model=MODEL,
-        max_tokens=8000,
+        max_tokens=16000,
         system=prompts.SYSTEM,
         messages=[{"role": "user", "content": user_prompt}],
         output_config={
@@ -87,12 +92,17 @@ def _call(client, user_prompt: str, schema: dict) -> Optional[dict]:
             fallbacks="default",
             **kwargs,
         )
-    except Exception:                          # noqa: BLE001
-        # 베타 기능을 못 쓰는 환경이면 일반 경로로 한 번 더
+    except TypeError:
+        # SDK 가 낡아 fallbacks 인자를 모르는 경우만 일반 경로로 내려간다.
+        # 예전에는 모든 예외를 여기서 삼켜, 400·429 까지 두 번씩 때렸다.
         resp = client.messages.create(**kwargs)
 
-    if getattr(resp, "stop_reason", None) == "refusal":
-        return None
+    stop = getattr(resp, "stop_reason", None)
+    if stop == "refusal":
+        why = getattr(getattr(resp, "stop_details", None), "category", None)
+        raise RuntimeError(f"안전 분류기가 거절했습니다 (분류: {why or '미상'})")
+    if stop == "max_tokens":
+        raise RuntimeError("응답이 max_tokens 에서 잘렸습니다 — HR_EFFORT 를 낮추십시오")
 
     text = next((b.text for b in resp.content if getattr(b, "type", "") == "text"), "")
     if not text.strip():

@@ -32,9 +32,10 @@ OUTPUT_SCHEMA = {
             "type": "string",
             "description": "리포트에 실릴 최종 문장. 줄바꿈으로 항목을 구분할 수 있다.",
         },
+        # 개수 제약(minItems·maxItems)은 구조화 출력이 받지 않는다 — 넣으면 400 이다.
+        # 근거가 몇 건이어야 하는지는 R-16 이 코드로 확인한다.
         "evidence": {
             "type": "array",
-            "minItems": 1,
             "items": {
                 "type": "object",
                 "properties": {
@@ -62,7 +63,7 @@ MEMORIZE_SCHEMA = {
         "text": {"type": "string",
                  "description": "외울 문장 한 개. 강사 교정 표현을 그대로 포함한다."},
         "parts": {
-            "type": "array", "minItems": 1, "maxItems": 4,
+            "type": "array",                 # 개수 제약은 프롬프트로 건다 (위 주석 참고)
             "items": {
                 "type": "object",
                 "properties": {
@@ -87,7 +88,7 @@ EMPHASIS_SCHEMA = {
     "properties": {
         "text": {"type": "string", "description": "판단 요약 한 줄"},
         "spans": {
-            "type": "array", "maxItems": 12,
+            "type": "array",                 # 개수 제약은 프롬프트로 건다 (위 주석 참고)
             "items": {
                 "type": "object",
                 "properties": {
