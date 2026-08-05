@@ -131,9 +131,25 @@ def send_report(report_id: int, db: Session = Depends(get_db)):
 
     context = card.card_json.get("context") or {}
     program = context.get("program") or context.get("과정명") or "피드백 리포트"
-    subject = f"[{program}] {person.get('name')} 님 개인 피드백 리포트"
+    round_ = context.get("차수") or context.get("round") or ""
+    date = context.get("날짜") or context.get("date") or ""
+    rater = context.get("강사") or context.get("평가자") or ""
+    name = person.get("name") or "참가자"
 
-    result = mailer.send(to, subject, render(report.body["presentation"]))
+    subject = " ".join(x for x in (program, round_) if x)
+    subject = f"[{subject}] {name} 님 개인 피드백 리포트"
+
+    # 리포트는 본문이 아니라 파일로 붙인다. 받는 사람이 그대로 저장할 수 있고,
+    # 브라우저에서 열어 인쇄(PDF)까지 된다.
+    html = render(report.body["presentation"])
+    stamp = str(date).replace("-", "").replace(".", "")[:8]
+    filename = "_".join(x for x in ("개인리포트", name, stamp) if x) + ".html"
+
+    result = mailer.send(
+        to, subject,
+        mailer.report_body(name, program, round_, date, rater),
+        attachment=(filename, html.encode("utf-8")),
+    )
     if result.get("sent"):
         report.sent_at = dt.datetime.utcnow()
         db.commit()

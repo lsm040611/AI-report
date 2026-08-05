@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import datetime as _dt
 import os
 import re
 import smtplib
@@ -105,7 +106,9 @@ def config() -> MailConfig:
         host=host,
         port=port,
         user=user,
-        password=os.getenv("HR_SMTP_PASS", ""),
+        # 구글 앱 비밀번호는 'abcd efgh ijkl mnop' 처럼 4자리씩 띄어서 보여 준다.
+        # 보이는 대로 붙여넣는 것이 자연스러운데, 공백이 섞이면 인증이 막힌다.
+        password=re.sub(r"\s+", "", os.getenv("HR_SMTP_PASS", "")),
         sender=sender,
         sender_name=os.getenv("HR_MAIL_FROM_NAME", "HRD 피드백"),
         use_ssl=port == 465,
@@ -117,33 +120,89 @@ def valid(address: Optional[str]) -> bool:
     return bool(address and EMAIL_RE.match(address.strip()))
 
 
-def build_message(cfg: MailConfig, to: str, subject: str, html: str) -> EmailMessage:
-    """HTML 리포트를 본문에 그대로 싣는다. 첨부보다 열어 보기 쉽다."""
+_DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def format_date(raw) -> str:
+    """'2026-05-19' → 'Tue May 19'. 컴퓨터 지역 설정에 좌우되지 않게 직접 만든다."""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"):
+        try:
+            d = _dt.datetime.strptime(text[:len(fmt) + 4], fmt)
+        except ValueError:
+            continue
+        return f"{_DAYS[d.weekday()]} {_MONTHS[d.month - 1]} {d.day:02d}"
+    return text                       # 못 읽으면 적힌 그대로 둔다
+
+
+def report_body(name: str, program: str, round_: str = "",
+                date: str = "", rater: str = "", team: str = "") -> str:
+    """리포트 안내 메일 본문. 값이 없는 줄은 넣지 않는다."""
+    title = " ".join(x for x in (program, round_) if x) or "개인"
+    lines = [f"{name} 님,", "", f"{title} 개인 리포트를 첨부합니다."]
+
+    meta = []
+    if date:
+        meta.append(f"기준일: {format_date(date)}")
+    if rater:
+        meta.append(f"평가자: {rater}")
+    if meta:
+        lines += [""] + meta
+
+    lines += [
+        "",
+        "본 리포트는 수신자 본인에게만 발송되며, "
+        "타 참가자의 평가 내용은 포함되어 있지 않습니다.",
+        "문의 사항은 본 메일로 회신 바랍니다.",
+        "",
+        team or os.getenv("HR_MAIL_TEAM", "교육운영팀"),
+    ]
+    return "\n".join(lines)
+
+
+def build_message(cfg: MailConfig, to: str, subject: str, body: str,
+                  attachment: Optional[tuple] = None) -> EmailMessage:
+    """본문은 짧은 안내글, 리포트는 HTML 파일로 붙인다.
+
+    리포트를 본문에 통째로 넣으면 메일 앱마다 표가 깨지고, 받는 사람이
+    나중에 다시 열어 보기도 어렵다. 파일로 주면 그대로 저장되고
+    브라우저에서 열어 인쇄(PDF)까지 된다.
+    """
     msg = EmailMessage()
     msg["From"] = formataddr((cfg.sender_name, cfg.sender or cfg.user))
     msg["To"] = to
     msg["Subject"] = subject
-    msg.set_content("이 메일은 HTML 로 작성되었습니다. HTML 을 볼 수 있는 환경에서 열어 주십시오.")
-    msg.add_alternative(html, subtype="html")
+    msg.set_content(body)
+    if attachment:
+        filename, data = attachment
+        msg.add_attachment(data, maintype="text", subtype="html",
+                           filename=filename)
     return msg
 
 
-def send(to: str, subject: str, html: str,
+def send(to: str, subject: str, body: str,
+         attachment: Optional[tuple] = None,
          cfg: Optional[MailConfig] = None) -> dict:
     """한 통 보낸다. 보내지 못하는 상태면 미리보기 결과를 돌려준다.
 
     예외를 밖으로 던지지 않는다 — 한 통이 실패해도 나머지 발송이 멈추면 안 된다.
     """
     cfg = cfg or config()
+    attached = attachment[0] if attachment else None
+    size = len(attachment[1]) if attachment else 0
 
     if not valid(to):
         return {"to": to, "sent": False, "reason": "주소 형식이 아닙니다"}
     if not cfg.ready:
         return {"to": to, "sent": False, "dry_run": True,
                 "reason": cfg.why_not(), "subject": subject,
-                "bytes": len(html.encode("utf-8"))}
+                "attachment": attached, "bytes": size}
 
-    msg = build_message(cfg, to, subject, html)
+    msg = build_message(cfg, to, subject, body, attachment)
     try:
         if cfg.use_ssl:
             with smtplib.SMTP_SSL(cfg.host, cfg.port,
