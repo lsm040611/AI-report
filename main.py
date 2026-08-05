@@ -93,6 +93,12 @@ INDEX = """
  pre{background:var(--cream);border:1px solid var(--line);border-radius:4px;
      padding:14px;font-size:12.5px;overflow:auto;white-space:pre-wrap}
  .err{color:var(--red);font-weight:700}
+ .notes{margin-top:18px;border-top:1px solid #EFE8D9;padding-top:12px}
+ .notes summary{font-size:13px;color:var(--muted);cursor:pointer;list-style:none}
+ .notes summary::before{content:'▸ ';font-size:11px}
+ .notes[open] summary::before{content:'▾ '}
+ .notes ul{margin:10px 0 0;padding-left:18px;font-size:13px;color:var(--muted);
+           line-height:1.75}
 </style></head><body>
 <div class=sheet>
   <h1>HR AI 리포트 엔진</h1>
@@ -112,6 +118,7 @@ INDEX = """
 </div>
 <script>
 const f=document.getElementById('f'),out=document.getElementById('out'),b=document.getElementById('b');
+const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 f.addEventListener('submit',async e=>{
   e.preventDefault(); b.disabled=true; out.innerHTML='<p>처리 중…</p>';
   try{
@@ -129,16 +136,27 @@ f.addEventListener('submit',async e=>{
       if(d.traceback) h+='<pre>'+d.traceback.join('\\n').replace(/</g,'&lt;')+'</pre>';
       out.innerHTML=h; return;
     }
-    let h='<p><b>카드 '+d.cards+'장</b> · 유형 '+JSON.stringify(d.by_source_type)+
-          ' · 생성 '+(d.generation? d.generation.accepted+'건 수락':'-')+'</p>';
+    const kinds=Object.entries(d.by_source_type||{})
+      .map(([k,v])=>k+' '+v+'명').join(' · ');
+    const made=(d.reports||[]).filter(x=>x.report_id).length;
+    let h='<p><b>카드 '+d.cards+'장</b>'+(kinds?' · '+kinds:'')+
+          ' · 리포트 '+made+'편</p>';
     (d.reports||[]).forEach(x=>{
       h+='<div class=row><span class=nm>'+x.name+'</span>'+
          (x.report_id? '<a href="'+x.html+'" target=_blank>리포트 열기 ↗</a>'
                      : '<span class=blk>'+x.blocked_by+'</span>')+'</div>';
     });
-    if(d.warnings&&d.warnings.length) h+='<pre>'+d.warnings.join('\\n')+'</pre>';
-    if(d.generation&&d.generation.rejects&&d.generation.rejects.length)
-      h+='<pre>R-16 거부: '+JSON.stringify(d.generation.rejects,null,1)+'</pre>';
+
+    // 담당자용 안내는 접어 둔다 — 리포트를 보러 온 화면에 원시 로그가 깔리면
+    // 무엇이 잘 됐는지가 안 보인다.
+    const notes=[];
+    (d.warnings||[]).forEach(w=>notes.push(esc(w)));
+    ((d.generation&&d.generation.rejects)||[]).forEach(r=>
+      notes.push('<b>'+esc(r.rule_id)+'</b> '+esc(r.person||'')+' — '+esc(r.reason||'')));
+    if(d.report_error) notes.push('리포트 생성 오류 — '+esc(d.report_error));
+    if(notes.length)
+      h+='<details class=notes><summary>처리 안내 '+notes.length+'건</summary><ul><li>'+
+         notes.join('</li><li>')+'</li></ul></details>';
     out.innerHTML=h;
   }catch(err){out.innerHTML='<p class=err>'+err+'</p>';}
   finally{b.disabled=false;}
