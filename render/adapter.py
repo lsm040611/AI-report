@@ -592,11 +592,17 @@ def _fixnotes(card: dict) -> dict:
 # 실천 체크리스트 (R-17 생성물)
 # ══════════════════════════════════════════════════════════════
 def _todo(card: dict, stype: str) -> dict:
-    """실천 체크리스트. 각 항목 아래에 근거가 된 원문을 함께 보여 준다.
+    """실천 체크리스트. 항목 아래에 근거가 된 강사 코멘트를 함께 보여 준다.
 
     R-16이 요구하는 '근거 연결'을 담당자 화면에만 두지 않고 리포트에도 드러낸다.
     받는 사람이 "이건 어디서 나온 말이지?"를 되묻지 않아도 되게 하기 위해서다.
+
+    **단, 진단서베이에서는 근거를 싣지 않는다.** 거기서 근거는 강사가 아니라
+    동료가 쓴 문장이고, 리더에게 그대로 보여 주면 누가 썼는지 짚인다.
+    근거는 검수용으로 카드에만 남는다.
     """
+    show_quote = quote_allowed(card) and card.get("direction") != "aggregated_responses"
+
     items = []
     for g in _generated(card, "R-17"):
         if g.get("task") == "curate_gap_comment":
@@ -607,7 +613,7 @@ def _todo(card: dict, stype: str) -> dict:
             item = {"html": _safe(line)}
             quote = quotes[i] if i < len(quotes) else ""
             # 항목 문장이 원문을 거의 그대로 옮긴 경우엔 같은 말을 두 번 쓰지 않는다
-            if quote and _norm(quote)[:16] not in _norm(line):
+            if show_quote and quote and _norm(quote)[:16] not in _norm(line):
                 item["sub"] = f"강사 코멘트: {quote[:90]}"
             items.append(item)
     if not items:
