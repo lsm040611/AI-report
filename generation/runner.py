@@ -109,7 +109,8 @@ def _accept(db: Session, h: Handoff, card: Card, result: dict, operator: str) ->
     data = dict(card.card_json)
     payload = h.payload or {}
     generated = list(data.get("generated", []))
-    generated.append({
+    entry = {
+        "handoff_id": h.id,
         "rule_id": h.rule_id,
         "task": h.task,
         # 어느 주관식에서 나온 문장인지 — 표현 계층이 제목을 정하는 데 쓴다
@@ -122,7 +123,13 @@ def _accept(db: Session, h: Handoff, card: Card, result: dict, operator: str) ->
         # 작업마다 딸려 오는 추가 필드(암기 문장의 parts·closing 등)를 잃지 않는다
         "extra": {k: v for k, v in result.items()
                   if k not in ("text", "evidence", "engine", "task_label", "error")},
-    })
+    }
+
+    # 같은 작업을 다시 받으면 갈아끼운다. 예전에는 무조건 덧붙여서, 목으로
+    # 만든 문장 아래에 새 문장이 또 붙어 같은 이야기가 두 번 실렸다.
+    keys = _task_keys(entry)
+    generated = [g for g in generated if not (_task_keys(g) & keys)]
+    generated.append(entry)
     data["generated"] = generated
 
     if h.rule_id == "R-18":
@@ -134,6 +141,18 @@ def _accept(db: Session, h: Handoff, card: Card, result: dict, operator: str) ->
 
     card.card_json = data
     h.status = "accepted"
+
+
+def _task_keys(g: dict) -> set:
+    """같은 작업의 생성물인지 가리는 키 — 하나라도 겹치면 같은 작업이다.
+
+    handoff_id 만으로 짚으면 이 필드가 없던 시절에 저장된 카드가 안 걸린다.
+    그래서 규칙·작업·문항 조합도 함께 본다.
+    """
+    keys = {("k", g.get("rule_id"), g.get("task"), g.get("label"), g.get("role"))}
+    if g.get("handoff_id"):
+        keys.add(("h", g["handoff_id"]))
+    return keys
 
 
 def _apply_emphasis(data: dict, payload: dict, result: dict) -> None:

@@ -12,3 +12,6 @@ fixtures/
 # 정리 전 원본 — 커밋 기록에 이미 남아 있어 따로 담지 않는다
 _backup_flat/
 out_blind/
+
+# AI 재작성 주고받는 파일 — 단서를 걸렀어도 실제 응답 내용이다
+handoff_ai/
