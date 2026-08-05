@@ -18,6 +18,21 @@ where py >nul 2>nul && set "PY=py -3.10"
 if not defined PY where python >nul 2>nul && set "PY=python"
 if not defined PY goto NOPY
 
+rem First run on a new PC has no packages installed. Do it here so that
+rem double-clicking this file is genuinely all the user has to do.
+%PY% -c "import fastapi, uvicorn, openpyxl, sqlalchemy, multipart" >nul 2>nul
+if errorlevel 1 (
+    echo First run on this PC - installing required packages.
+    echo This takes 1-3 minutes. Please wait.
+    echo.
+    %PY% -m pip install -r requirements.txt
+    echo.
+    %PY% -c "import fastapi" >nul 2>nul
+    if errorlevel 1 goto NOPKG
+    echo Packages installed.
+    echo.
+)
+
 rem A server left over from a previous run would hold port 8000 and
 rem make this one fail with "address already in use". Clear it first.
 call :FREEPORT
@@ -50,6 +65,15 @@ exit /b 0
 :NOPY
 echo [ERROR] Python not found.
 echo         Install from python.org and enable "Add python.exe to PATH".
+echo.
+pause
+exit /b 1
+
+:NOPKG
+echo [ERROR] Package install failed.
+echo         Check your internet connection and run this file again.
+echo         If it keeps failing, open a terminal here and run:
+echo             python -m pip install -r requirements.txt
 echo.
 pause
 exit /b 1
