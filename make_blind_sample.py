@@ -30,8 +30,12 @@ from openpyxl.styles import Alignment, Font, PatternFill
 # 받아 보기 위한 주소라 네 명 모두 같은 값을 쓴다.
 TESTER_EMAIL = "lsm040611@naver.com"
 
-OUT_DEFAULT = (r"C:\Users\user\OneDrive\문서\카카오톡 받은 파일"
-               r"\2팀_샘플데이터_배포패키지_3\SUNIC_2팀_샘플데이터")
+# 배포 샘플 폴더가 있으면 거기에, 없으면(다른 PC·리눅스) 프로젝트 안 fixtures 에.
+_SAMPLE_DIR = os.path.join(os.path.expanduser("~"), "OneDrive", "문서",
+                           "카카오톡 받은 파일", "2팀_샘플데이터_배포패키지_3",
+                           "SUNIC_2팀_샘플데이터")
+OUT_DEFAULT = (_SAMPLE_DIR if os.path.isdir(_SAMPLE_DIR)
+               else os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures"))
 FILENAME = "20260805_3차수_C조.xlsx"
 
 # ── 강조 서식 — 배포 샘플과 뜻이 같지만 색이 다르다 ────────────────────────
