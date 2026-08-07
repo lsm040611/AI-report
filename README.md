@@ -123,8 +123,31 @@ PDF가 필요하면 리포트를 브라우저로 열고 `Ctrl+P → 대상: PDF�
 | `HR_SMTP_HOST` / `HR_SMTP_PORT` | `smtp.naver.com` / `587` | 465면 SSL, 그 밖은 STARTTLS |
 | `HR_SMTP_USER` / `HR_SMTP_PASS` | 없음 | 네이버는 **애플리케이션 비밀번호**를 씁니다 |
 
+### API 키 넣기
+
+**`api.env`** 를 열어 키만 채우면 됩니다. 이 파일은 `.gitignore` 에 있어
+커밋되지 않습니다.
+
+```ini
+ANTHROPIC_API_KEY=sk-ant-...
+HR_EFFORT=medium          # low | medium | high | xhigh | max
+```
+
+1. <https://console.anthropic.com> 에서 크레딧 충전(최소 $5)
+2. 같은 화면에서 **월 지출 한도**를 걸어 두십시오 — 실수로 많이 나가는 것을 막습니다
+3. `API keys → Create Key` 로 만든 값을 위에 붙여넣기
+
+넣은 뒤 **한 번만** 실제로 호출해 확인하십시오. 평가지를 통째로 올리기 전에
+문제를 잡을 수 있고, 한 건에 토큰이 얼마나 드는지도 보여 줍니다.
+
 ```powershell
-$env:ANTHROPIC_API_KEY = "sk-ant-..."   # 실제 생성으로 전환
+py -3.10 check_api.py
+```
+
+환경변수를 직접 설정하면 그쪽이 이깁니다 — 잠깐 다른 키로 바꿔 볼 때 편합니다.
+
+```powershell
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
 $env:HR_AUTO_APPROVE = "0"              # 운영 모드(담당자 승인 필수)
 .\start.bat
 ```

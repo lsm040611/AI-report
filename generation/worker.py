@@ -108,9 +108,18 @@ def _call(client, user_prompt: str, schema: dict) -> Optional[dict]:
     if not text.strip():
         return None
     try:
-        return json.loads(text)
+        data = json.loads(text)
     except json.JSONDecodeError:
         return None
+
+    # 쓴 토큰을 함께 돌려준다. 발표 전에 한 건이 얼마나 드는지 봐 두면
+    # 전체를 돌렸을 때 얼마가 나올지 가늠할 수 있다.
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        data["usage"] = {k: getattr(usage, k, None) for k in
+                         ("input_tokens", "output_tokens",
+                          "cache_creation_input_tokens", "cache_read_input_tokens")}
+    return data
 
 
 # --------------------------------------------------------------------------

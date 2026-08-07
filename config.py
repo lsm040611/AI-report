@@ -7,6 +7,11 @@ from __future__ import annotations
 
 import os
 
+import localenv
+
+# 폴더 안의 *.env 를 먼저 읽는다. 그래야 서버 켤 때마다 키를 손으로 넣지 않아도 된다.
+localenv.load()
+
 
 def _flag(name: str, default: str = "1") -> bool:
     return os.getenv(name, default).strip().lower() not in ("0", "false", "no", "off", "")
