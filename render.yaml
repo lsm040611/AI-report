@@ -52,15 +52,14 @@ services:
         value: medium
       - key: HR_CONCURRENCY
         value: "4"
-      - key: HR_STORAGE
-        value: /var/data/storage
-      - key: HR_DB_URL
-        value: sqlite:////var/data/hr_report.db
 
-    # 무료 요금제에서는 디스크를 붙일 수 없다. 그러면 서버가 다시 뜰 때마다
-    # DB 와 업로드 파일이 사라진다 — 시연에는 문제없지만 실제 운용은 못 한다.
-    # 유료로 올려 디스크를 쓰려면 아래 세 줄의 주석을 풀고, 무료로 쓰려면
-    # 위의 HR_STORAGE·HR_DB_URL 을 ./storage 와 sqlite:///./hr_report.db 로 바꾼다.
+    # 자료를 어디에 둘지는 여기서 정하지 않는다. config.py 가 /var/data 가
+    # 붙어 있는지 직접 보고 고른다 — 무료면 현재 폴더, 디스크를 붙이면 디스크.
+    # 설정 두 칸을 사람이 맞춰 고치게 하면 반드시 어긋난다.
+    #
+    # 무료 요금제에서는 디스크를 붙일 수 없어, 서버가 다시 뜰 때마다 DB 와
+    # 업로드 파일이 사라진다. 시연에는 문제없지만 실제 운용은 못 한다.
+    # 유료로 올렸다면 아래 네 줄의 주석만 풀면 된다. 그 외에 고칠 것은 없다.
     #
     # disk:
     #   name: data
