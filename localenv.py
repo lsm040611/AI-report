@@ -9,6 +9,11 @@ API 키와 메일 비밀번호를 서버 켤 때마다 손으로 넣게 하고 �
 
 이미 설정된 환경변수는 건드리지 않는다 — 잠깐 다른 키로 바꿔 볼 때
 PowerShell 에서 `$env:ANTHROPIC_API_KEY = "..."` 한 줄이면 되게 하기 위해서다.
+
+**빈 값도 설정된 것으로 본다.** 예전에는 빈 값을 '안 넣은 것'으로 보고 파일에서
+채웠는데, 그 바람에 `ANTHROPIC_API_KEY=""` 로 꺼 놓고 목 모드로 돌린다고 믿었던
+시험들이 실제로는 API 를 부르고 있었다. 끄겠다는 뜻으로 빈 값을 넣는 것이니
+그 뜻을 그대로 따른다.
 """
 from __future__ import annotations
 
@@ -38,5 +43,5 @@ def load(force: bool = False) -> None:
                 continue
             key, _, value = line.partition("=")
             key, value = key.strip(), value.strip().strip('"').strip("'")
-            if key and value and not os.getenv(key):
+            if key and value and key not in os.environ:
                 os.environ[key] = value
