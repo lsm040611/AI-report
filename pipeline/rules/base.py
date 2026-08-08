@@ -139,7 +139,7 @@ def max_severity(card: dict) -> Optional[str]:
 
 
 def is_sendable(card: dict) -> Tuple[bool, str]:
-    """이 카드가 다음 단계로 갈 수 있는가. 리포트 생성·발송 매핑표 공용 게이트."""
+    """이 카드를 **보낼 수** 있는가. 발송 매핑표의 게이트."""
     person = card.get("person") or {}
     if person.get("status") == "excluded":
         return False, "담당자가 제외 처리한 카드입니다"
@@ -148,6 +148,43 @@ def is_sendable(card: dict) -> Tuple[bool, str]:
         if f.get("severity") == HOLD and not f.get("resolved"):
             action = f.get("action") or "담당자 확인 필요"
             return False, f"미해결 hold [{f.get('code')}] {action}"
+
+    if not (card.get("source_type") or {}).get("confirmed_by_operator"):
+        return False, "source_type 승인 전입니다"
+    return True, ""
+
+
+# **보내는 것**만 막는 hold. 리포트를 만드는 것은 막지 않는다.
+#   누구인지 못 정했다 → 잘못된 사람에게 갈 수 있으니 발송을 막는다
+#   청강생이다         → 보낼지 말지는 담당자가 정한다 (핸드오프 v2 §4-5)
+# 셋 다 리포트 내용에는 문제가 없고, 오히려 담당자가 **보고 나서** 판단해야 한다.
+# 리포트를 안 만들면 검수 화면에 볼 것이 없어 판단할 수가 없다.
+DISPATCH_ONLY_HOLDS = {
+    "person_not_in_roster",
+    "ambiguous_person",
+    "non_regular_participant",
+}
+
+
+def is_reportable(card: dict) -> Tuple[bool, str]:
+    """이 카드로 **리포트를 만들** 수 있는가.
+
+    발송 게이트와 나눈 이유 — 명부에 없는 사람이라고 리포트를 못 만들 이유는
+    없다. 못 하는 건 '보내는 것'뿐이다. 둘을 한 함수로 묶어 두었더니, 명부를
+    붙인 순간 명부에 없는 사람이 전원 hold 가 되어 리포트가 한 편도 안 나왔다.
+    담당자는 검수 화면에서 볼 것조차 없어진다.
+    """
+    person = card.get("person") or {}
+    if person.get("status") == "excluded":
+        return False, "담당자가 제외 처리한 카드입니다"
+
+    for f in card.get("flags", []):
+        if f.get("severity") != HOLD or f.get("resolved"):
+            continue
+        if f.get("code") in DISPATCH_ONLY_HOLDS:
+            continue                       # 발송에서만 막는다
+        action = f.get("action") or "담당자 확인 필요"
+        return False, f"미해결 hold [{f.get('code')}] {action}"
 
     if not (card.get("source_type") or {}).get("confirmed_by_operator"):
         return False, "source_type 승인 전입니다"

@@ -22,7 +22,8 @@ from sqlalchemy.orm import Session
 import mailer
 from database import get_db
 from models import Card, Course, Report
-from pipeline.rules.base import RuleContext, is_sendable, quote_allowed
+from pipeline.rules.base import (RuleContext, is_reportable,
+                                 is_sendable, quote_allowed)
 from pipeline.rules.report import (r14_growth, r14_repeat_signal,
                                    r19_extract_best_practice)
 from render import render, template, to_presentation_card
@@ -37,7 +38,7 @@ def generate(card_id: int, db: Session = Depends(get_db)):
     if not card:
         raise HTTPException(404, "카드 없음")
 
-    ok, reason = is_sendable(card.card_json)
+    ok, reason = is_reportable(card.card_json)
     if not ok:
         raise HTTPException(409, f"진행 불가 — {reason}")
 

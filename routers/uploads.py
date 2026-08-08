@@ -20,7 +20,7 @@ from models import (Card, CompetencyMapping, Course, CourseAlias, Handoff,
 from pipeline import courses as coursematch
 from pipeline import run_pipeline
 from pipeline.analyze import analyze
-from pipeline.rules.base import is_sendable, max_severity
+from pipeline.rules.base import is_reportable, is_sendable, max_severity
 from contract import SOURCE_TYPES
 from routers.reports import build_report
 
@@ -598,7 +598,7 @@ def list_cards(upload_id: int, db: Session = Depends(get_db)):
 def _build_all(db: Session, upload_id: int) -> List[dict]:
     out = []
     for c in db.query(Card).filter(Card.upload_id == upload_id).all():
-        ok, reason = is_sendable(c.card_json)
+        ok, reason = is_reportable(c.card_json)
         if not ok:
             out.append({"card_id": c.id, "name": c.person_name,
                         "report_id": None, "blocked_by": reason})

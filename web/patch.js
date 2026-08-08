@@ -217,12 +217,16 @@ Object.assign(Component.prototype, {
     this.setState({ validateGenerating: true });
 
     // 담당자가 고친 것과 뺀 것만 추린다
-    const fixes = (s.validationRows || [])
-      .filter((r) => r.resolved && r.fixedValue !== undefined
-                     && r.fixedValue !== null && r.action !== 'exclude')
-      .map((r) => ({ rowNumber: r.row, field: r.field, value: String(r.fixedValue) }));
-    const excluded = (s.validationRows || [])
-      .filter((r) => r.action === 'exclude').map((r) => r.row);
+    // 화면은 처리 결과를 `resolvedLabel` 글자로만 남긴다 ('수정됨 · …',
+    // '제외됨', '대상 확인됨 · …'). 따로 플래그가 없어서 그 글자로 가른다.
+    const rows = s.validationRows || [];
+    const isExcluded = (r) => (r.resolvedLabel || '').indexOf('제외') === 0;
+    const fixes = rows
+      .filter((r) => r.resolved && !isExcluded(r)
+                     && r.fixedValue !== undefined && r.fixedValue !== null)
+      .map((r) => ({ rowNumber: r.row, field: r.field,
+                     value: String(r.fixedValue) }));
+    const excluded = rows.filter(isExcluded).map((r) => r.row);
 
     const course = s.linkedCourseKey
       ? { mode: 'link', courseId: s.linkedCourseKey }
