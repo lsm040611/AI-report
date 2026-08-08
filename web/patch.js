@@ -191,7 +191,10 @@ Object.assign(Component.prototype, {
         engineCourseMode: m.mode,
         engineCourseTitle: m.suggestedTitle,
         linkedCourseKey: m.suggestedCourseId || null,
-        courseLinkStatus: m.suggestedCourseId ? 'prefilled' : 'idle',
+        // 엔진 제안을 미리 연결해 둔다. 담당자는 화면에서 그 제안과 근거를
+        // 보고 있고, 아니면 [← 뒤로] 로 바꾸면 된다. 별도 승인 클릭을 강제하면
+        // 그걸 못 찾아 '리포트 생성' 이 영영 안 켜진다 — 실제로 그랬다.
+        courseLinkStatus: 'linked',
         courseLinkChoiceLabel: m.suggestedTitle || '',
         newCourseName: m.mode === 'create' ? (m.suggestedTitle || '') : '',
         validationRows: toValidationRows(a.rows),
@@ -212,6 +215,17 @@ Object.assign(Component.prototype, {
     const s = this.state;
     if (!s.draftId) {
       this.showToast('먼저 파일을 올려 주세요.');
+      return;
+    }
+    // 버튼이 꺼져 있을 때 눌러도 아무 일이 없으면, 무엇이 모자란지 알 수 없다.
+    const missing = [];
+    if (!s.reportTypeApproved) missing.push('유형 승인');
+    if (s.courseLinkStatus !== 'linked') missing.push('과정 연결 승인');
+    const left = (s.validationRows || [])
+      .filter((r) => !r.resolved && r.type === 'error').length;
+    if (left) missing.push('오류 ' + left + '건 처리');
+    if (missing.length) {
+      this.showToast('아직 남았습니다 — ' + missing.join(' · '));
       return;
     }
     this.setState({ validateGenerating: true });
@@ -806,6 +820,28 @@ Component.prototype.renderVals = function () {
       onSelect: () => this.showEvidence(this.currentReportId(), sent.id),
     }));
     props.reviewEvidence = s.engineEvidence || null;
+  }
+
+  // '리포트 생성' 버튼이 켜지는 조건.
+  //
+  // 원래 조건은 경고까지 **전건 처리** 였다. 그런데 경고 행에 붙은 버튼은
+  // [수정]·[제외]·[대상 확인] 셋뿐이고 "확인했음"이 없다. 점수 누락 경고를
+  // 지우려면 없는 점수를 지어내야 한다 — 통과할 수 없는 문이었다.
+  // 그래서 버튼이 꺼진 채였고, 눌러도 아무 일이 없으니 무엇이 모자란지도
+  // 알 수 없었다.
+  //
+  // 경고는 표에 그대로 남아 담당자가 보고 있다. 막아야 할 것은 **오류**다.
+  if (s.draftId) {
+    const errs = (s.validationRows || [])
+      .filter((r) => !r.resolved && r.type === 'error').length;
+    props.reportGenerateEnabled = !s.validateGenerating && errs === 0;
+    const left = [];
+    if (!s.reportTypeApproved) left.push('유형 승인');
+    if (s.courseLinkStatus !== 'linked') left.push('과정 연결 승인');
+    if (errs) left.push('오류 ' + errs + '건');
+    props.gateReasonText = left.length
+      ? '남은 조건: ' + left.join(' · ')
+      : '모든 조건이 충족되었습니다. 경고는 참고용이며 진행을 막지 않습니다.';
   }
 
   // 과정 연결 — 원래 함수들은 더미 상수(COURSE_LINK_SUGGESTIONS)와 더미 과정

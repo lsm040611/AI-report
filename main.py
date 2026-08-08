@@ -260,6 +260,22 @@ def index():
     return HTMLResponse(INDEX.replace("__MODE__", mode_banner()), headers=NO_CACHE)
 
 
+@app.get("/favicon.ico")
+def favicon():
+    """탭 아이콘. 없으면 브라우저가 요청마다 404 를 콘솔에 남겨,
+    정작 봐야 할 오류가 그 사이에 묻힌다."""
+    from fastapi.responses import Response
+    # 빨간 사각형 하나짜리 SVG — 파일을 따로 두지 않는다
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+           '<rect width="32" height="32" rx="6" fill="#DA1B33"/>'
+           '<rect x="7" y="8" width="18" height="3" rx="1.5" fill="#fff"/>'
+           '<rect x="7" y="15" width="18" height="3" rx="1.5" fill="#fff"/>'
+           '<rect x="7" y="22" width="11" height="3" rx="1.5" fill="#fff"/>'
+           "</svg>")
+    return Response(svg, media_type="image/svg+xml",
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/simple", response_class=HTMLResponse)
 def simple():
     """한 장짜리 업로드 화면. 프론트가 말썽일 때 여기로 우회한다."""
