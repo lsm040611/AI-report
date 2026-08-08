@@ -368,8 +368,14 @@ def _card_briefs(db: Session, upload_id: int) -> List[dict]:
     out = []
     for c in db.query(Card).filter(Card.upload_id == upload_id).all():
         ok, reason = is_sendable(c.card_json)
+        person = c.card_json.get("person") or {}
         out.append({"cardId": c.id, "name": c.person_name,
-                    "empId": c.person_id, "status": c.person_status,
+                    # 사번은 없을 수 있다. 화면이 문자열로 다루므로 None 을
+                    # 그대로 보내고, 대체값은 화면이 정하게 둔다.
+                    "empId": c.person_id,
+                    # 발송 화면이 수신자 표를 그릴 때 쓴다. 없으면 못 보낸다.
+                    "email": person.get("email") or None,
+                    "status": c.person_status,
                     "maxSeverity": c.max_severity,
                     "sendable": ok, "blockedBy": reason or None})
     return out

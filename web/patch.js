@@ -105,8 +105,12 @@ const SEVERITY_TO_STATUS = {
 function toMembers(cards) {
   return (cards || []).map((c) => ({
     name: c.name,
-    empId: c.empId || c.cardId,
+    // **반드시 문자열이어야 한다.** 화면 어딘가가 empId.toLowerCase() 를 부른다.
+    // 사번 없는 카드에 숫자 cardId 를 넣었더니 renderVals() 가 통째로 터졌고,
+    // 화면이 아무것도 안 그려졌다. 평가지에 사번이 없는 파일이 흔하다.
+    empId: String(c.empId || ('CARD-' + c.cardId)),
     cardId: c.cardId,
+    email: c.email || '',
     status: SEVERITY_TO_STATUS[c.maxSeverity] || 'unreviewed',
     ...(c.maxSeverity === 'review' ? { warningAcked: false } : {}),
   }));
@@ -634,6 +638,17 @@ if (typeof _origVals !== 'function') {
 }
 Component.prototype.renderVals = function () {
   const s = this.state;
+
+  // 원본이 empId.toLowerCase() 로 주소를 지어낸다. 사번이 문자열이 아니면
+  // 여기서 터지고 화면이 통째로 하얘진다. 원본은 우리 코드보다 **먼저**
+  // 돌기 때문에, 뒤에서 props 를 덮어써 봐야 이미 늦다. 부르기 전에 막는다.
+  (s.mainMembers || []).forEach((m) => {
+    if (typeof m.empId !== 'string') m.empId = String(m.empId == null ? '' : m.empId);
+  });
+  if (s.auditMemberData && typeof s.auditMemberData.empId !== 'string') {
+    s.auditMemberData.empId = String(s.auditMemberData.empId || '');
+  }
+
   const props = _origVals.call(this);
 
   props.simulateUpload = () => this.realUpload();
@@ -712,6 +727,15 @@ Component.prototype.renderVals = function () {
     }));
   } else if (s.engineInsight) {
     props.accItemComparison = [];
+  }
+
+  // 발송 전 수신자 표 — 원래 함수는 사번으로 주소를 지어낸다
+  // (empId.toLowerCase() + '@company.com'). 평가지에 적힌 진짜 주소를 쓴다.
+  if (s.mainMembers && !s.sendRows) {
+    props.recipients = s.mainMembers
+      .filter((m) => m.status === 'approved')
+      .map((m) => ({ name: m.name, empId: m.empId,
+                     email: m.email || '(평가지에 이메일 없음)' }));
   }
 
   // 발송 — 미리보기(실제로 안 보낸 것)를 성공으로 칠하지 않는다
