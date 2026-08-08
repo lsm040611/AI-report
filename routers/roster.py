@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -53,7 +54,11 @@ def import_roster(file: UploadFile = File(..., description="employees.csv"),
                   replace: bool = Query(True, description="기존 명부를 비우고 넣을지"),
                   db: Session = Depends(get_db)):
     """사원 마스터 CSV 를 적재한다. 같은 사번이 오면 갱신한다."""
-    raw = file.file.read()
+    return load_csv(db, file.file.read(), replace=replace)
+
+
+def load_csv(db: Session, raw: bytes, replace: bool = True) -> dict:
+    """CSV 본문 → 명부. 화면 업로드와 서버 시작 시 자동 적재가 같은 길을 쓴다."""
     text = _decode(raw)
     rows = list(csv.DictReader(io.StringIO(text)))
     if not rows:
@@ -100,6 +105,44 @@ def import_roster(file: UploadFile = File(..., description="employees.csv"),
             "total": total, "dispatchable": active,
             "excluded": total - active,
             "columns": {k: v for k, v in mapping.items()}}
+
+
+# 저장소에 함께 두는 기본 명부. 무료 배포는 서버가 다시 뜰 때마다 DB 가
+# 비워지는데, 그때마다 사람이 CSV 를 다시 올리는 것은 잊기 쉽다.
+SEED_CSV = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "seed", "employees.csv")
+
+
+def seed_if_empty() -> Optional[dict]:
+    """명부가 비어 있을 때만 기본 파일을 넣는다.
+
+    **비어 있을 때만** 이라는 것이 요점이다. 담당자가 화면에서 올린 명부를
+    서버가 재시작했다고 덮어써 버리면, 고쳐 둔 것이 조용히 사라진다.
+
+    끄려면 HR_ROSTER_SEED=0.
+    """
+    if os.getenv("HR_ROSTER_SEED", "1").strip().lower() in ("0", "false", "no"):
+        return None
+    if not os.path.exists(SEED_CSV):
+        return None
+
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        if db.query(RosterEntry).first() is not None:
+            return None                      # 이미 들어 있다 — 손대지 않는다
+        with open(SEED_CSV, "rb") as fh:
+            got = load_csv(db, fh.read(), replace=False)
+        print(f"[명부] 기본 명부를 넣었습니다 — {got['total']}명 "
+              f"(발송 가능 {got['dispatchable']}, 제외 {got['excluded']})")
+        return got
+    except Exception as exc:                 # noqa: BLE001
+        # 명부가 없다고 서버가 안 뜨면 안 된다. 리포트 생성은 명부 없이도 된다.
+        print(f"[명부] 기본 명부를 넣지 못했습니다 — {type(exc).__name__}: {exc}")
+        return None
+    finally:
+        db.close()
 
 
 @router.get("")

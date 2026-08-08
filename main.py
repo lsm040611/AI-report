@@ -21,6 +21,7 @@ from routers import (cards, dashboard, handoff, insights, reports,
 
 Base.metadata.create_all(bind=engine)
 ensure_columns()          # 이미 있는 표에 새로 생긴 열을 맞춰 준다
+roster.seed_if_empty()    # 명부가 비어 있으면 seed/employees.csv 를 넣는다
 
 app = FastAPI(
     title="HR AI Report Engine",
