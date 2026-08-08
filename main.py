@@ -15,10 +15,12 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 import auth
 from config import AUTO_APPROVE, MODEL, USE_LLM, mode_banner
-from database import Base, engine
-from routers import cards, dashboard, handoff, insights, reports, uploads
+from database import Base, engine, ensure_columns
+from routers import (cards, dashboard, handoff, insights, reports,
+                     roster, uploads)
 
 Base.metadata.create_all(bind=engine)
+ensure_columns()          # 이미 있는 표에 새로 생긴 열을 맞춰 준다
 
 app = FastAPI(
     title="HR AI Report Engine",
@@ -35,6 +37,7 @@ app.include_router(cards.router)
 app.include_router(handoff.router)
 app.include_router(reports.router)
 app.include_router(insights.router)
+app.include_router(roster.router)
 app.include_router(dashboard.router)
 
 

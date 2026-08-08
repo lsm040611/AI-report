@@ -160,11 +160,29 @@ class PersonResolution(Base):
 
 
 class RosterEntry(Base):
-    """운영 입력물. 제공 데이터가 더미라 사번·이메일이 없어 별도로 받는다."""
+    """사원 마스터. 평가지에는 이름만 있어서, 사번과 이메일은 여기서 온다.
+
+    실제 회사라면 인사 시스템(HRIS/AD)이 이 자리에 있다. 컬럼 이름을 그쪽이
+    내보내는 형태에 맞춰 두었으므로, 실배포 때는 적재원만 바꾸면 된다.
+
+    퇴직·휴직자도 **지운다고 해결되지 않는다.** 평가지에 이름이 남아 있으면
+    동명이인 판단에 필요하고, 그 사람이 회사에 있었다는 사실 자체는 참이다.
+    그래서 명부에는 두고 `status` 로 가른다 — 발송에서만 빠진다.
+    """
     __tablename__ = "roster"
     id: Mapped[int] = mapped_column(primary_key=True)
     person_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(64), index=True)
-    alias: Mapped[Optional[str]] = mapped_column(String(64))
+    alias: Mapped[Optional[str]] = mapped_column(String(64), index=True)
     email: Mapped[Optional[str]] = mapped_column(String(255))
     department: Mapped[Optional[str]] = mapped_column(String(128))
+    team: Mapped[Optional[str]] = mapped_column(String(128))
+    position: Mapped[Optional[str]] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    manager_id: Mapped[Optional[str]] = mapped_column(String(32))
+    note: Mapped[Optional[str]] = mapped_column(String(255))
+
+    @property
+    def dispatchable(self) -> bool:
+        """발송 대상인가. 재직 중이고 메일 주소가 있어야 한다."""
+        return self.status == "active" and bool((self.email or "").strip())

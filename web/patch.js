@@ -11,6 +11,24 @@
  * tools/build_web.py 가 이 파일을 프로토타입 안에 끼워 넣는다.
  */
 
+// ── 미리 만들어 둔 더미를 걷어낸다 ────────────────────────────────────
+// 프로토타입에는 '리더십 교육(3차)', '리더십 360° 진단(2회)' 같은 예시 과정과
+// 김서연·박민지 같은 예시 인물이 상수로 박혀 있다. 화면 모양을 보여 주려고
+// 넣은 것인데, 이제 실제 파일에서 만들어진 것과 섞이면 어느 것이 진짜인지
+// 알 수 없다. 배열을 통째로 비운다 — 상수를 지우는 대신 비우는 이유는,
+// 이 배열을 참조하는 코드가 여러 군데라 없애면 그쪽이 터지기 때문이다.
+//
+// PEOPLE 은 비우지 않는다. seedAuditMember() 가 거기서 청강생을 꺼내는데
+// 비어 있으면 undefined.name 으로 죽는다. 대신 화면에 실리는 명단(state)을
+// 아래 componentDidMount 에서 비운다.
+try {
+  COURSES.length = 0;                     // 담당자 운영 탭 과정 카드
+  MEMBER_BASE_COURSES.length = 0;         // 구성원 대시보드 과정 카드
+  REVIEW_FEEDBACK_SENTENCES.length = 0;   // 검수 화면 예시 문장
+} catch (e) {
+  console.warn('[엔진 연결] 더미 목록을 비우지 못했습니다', e);
+}
+
 // ── 엔진 말 ↔ 화면 말 ────────────────────────────────────────────────
 // 화면은 영문 키로, 엔진은 계약대로 한국어로 말한다. 여기서만 옮긴다.
 const TYPE_TO_ENGINE = {
@@ -102,9 +120,8 @@ function toValidationRows(rows) {
 const SEVERITY_TO_STATUS = {
   hold: 'hold', review: 'review', block_direct_quote: 'summary',
 };
-function toMembers(cards) {
-  return (cards || []).map((c) => ({
-    name: c.name,
+function toMember(c) {
+  return {
     // **반드시 문자열이어야 한다.** 화면 어딘가가 empId.toLowerCase() 를 부른다.
     // 사번 없는 카드에 숫자 cardId 를 넣었더니 renderVals() 가 통째로 터졌고,
     // 화면이 아무것도 안 그려졌다. 평가지에 사번이 없는 파일이 흔하다.
@@ -113,7 +130,23 @@ function toMembers(cards) {
     email: c.email || '',
     status: SEVERITY_TO_STATUS[c.maxSeverity] || 'unreviewed',
     ...(c.maxSeverity === 'review' ? { warningAcked: false } : {}),
-  }));
+  };
+}
+
+// 청강생(R-07)은 목록이 아니라 따로 난 칸에 들어간다. 발송 보류가 기본이고
+// 담당자가 개별로 풀어 준다 — 정규 수강생과 섞이면 그 구분이 사라진다.
+function splitMembers(cards) {
+  const regular = [], audit = [];
+  (cards || []).forEach((c) => {
+    (c.status === 'audit' ? audit : regular).push(toMember(c));
+  });
+  return {
+    regular,
+    audit: audit.length
+      ? { ...audit[0], sendIncluded: false, decided: false, selected: false }
+      : { name: '없음', empId: '—', status: 'unreviewed',
+          sendIncluded: false, decided: true, selected: false },
+  };
 }
 
 Object.assign(Component.prototype, {
@@ -200,13 +233,15 @@ Object.assign(Component.prototype, {
       (c.reports || []).forEach((r) => {
         if (r.report_id) byPerson[r.name] = r.report_id;
       });
+      const split = splitMembers(c.cards);
       this.setState({
         view: 'admin-review',
         validateGenerating: false,
         uploadId: c.uploadId,
         linkedCourseKey: c.courseId,
         courseLinkChoiceLabel: c.courseTitle,
-        mainMembers: toMembers(c.cards),
+        mainMembers: split.regular,
+        auditMemberData: split.audit,
         reportIdByName: byPerson,
         engineFlags: c.flags || [],
         selectedIdx: 0,
@@ -596,6 +631,18 @@ const _updated = Component.prototype.componentDidUpdate;
 
 Component.prototype.componentDidMount = function () {
   if (_mounted) _mounted.call(this);
+
+  // 처음 상태에 들어 있는 예시 자료를 비운다. 실제 파일을 올리면 채워진다.
+  // 비우지 않으면 아무것도 안 올렸는데 검수 명단에 사람이 여섯 명 있고,
+  // 인박스에 요청이 쌓여 있는 화면이 된다.
+  this.setState({
+    mainMembers: [], validationRows: [], excludedList: [],
+    requests: [], monthlyReports: [], adhocCourses: [], memberExtraCourses: [],
+    auditMemberData: { name: '없음', empId: '—', status: 'unreviewed',
+                       sendIncluded: false, decided: true, selected: false },
+    insightCourse: '',
+  });
+
   this._installHistory();
   this._paintBackButton();
   this._syncReport();

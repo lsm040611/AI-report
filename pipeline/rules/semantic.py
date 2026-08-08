@@ -132,7 +132,8 @@ def r15_resolve_person(card: dict, ctx: RuleContext) -> None:
     memo_key = f"{name}|{alias}|{_first(ctxd, ('과정명', '특강명', '진단명'))}"
     remembered = ctx.roster.get("resolved", {}).get(memo_key)
     if remembered:
-        person["person_id"] = remembered
+        found = next((p for p in roster if p.get("person_id") == remembered), None)
+        _adopt(card, person, found or {"person_id": remembered})
         mark_applied(card, "R-15", "이전 담당자 판단 재사용")
         return
 
@@ -148,7 +149,7 @@ def r15_resolve_person(card: dict, ctx: RuleContext) -> None:
                     break
 
     if len(cands) == 1:
-        person["person_id"] = cands[0].get("person_id")
+        _adopt(card, person, cands[0])
         mark_applied(card, "R-15", "명부 매칭")
     elif len(cands) > 1:
         add_flag(card, "ambiguous_person", HOLD,
@@ -156,6 +157,29 @@ def r15_resolve_person(card: dict, ctx: RuleContext) -> None:
                  action="담당자가 본인을 지정해야 진행 가능")
     else:
         add_flag(card, "person_not_in_roster", HOLD, action="명부 등록 필요")
+
+
+def _adopt(card: dict, person: dict, entry: dict) -> None:
+    """명부에서 찾은 사람의 사번과 주소를 카드에 옮긴다.
+
+    평가지에 이메일이 적혀 있으면 그쪽이 이긴다 — 그 파일을 만든 사람이
+    가장 최근 정보를 알고 있을 가능성이 높다.
+
+    명부에 있는데 주소가 비어 온 것은 '모르는 사람'이 아니라 **발송 대상이
+    아닌 사람**이다(휴직·퇴직·계정 미발급). 왜 못 보내는지 남겨 두지 않으면
+    발송 화면에서 이유 없이 빠진 것처럼 보인다.
+    """
+    person["person_id"] = entry.get("person_id")
+    if entry.get("email") and not person.get("email"):
+        person["email"] = entry["email"]
+    status = entry.get("status")
+    if status and status != "active":
+        add_flag(card, "not_active_employee", NOTICE,
+                 detail=f"명부 재직 상태 '{status}' — 발송 대상에서 제외됩니다")
+    elif entry.get("person_id") and not (entry.get("email")
+                                         or person.get("email")):
+        add_flag(card, "no_email", NOTICE,
+                 detail="명부에 메일 주소가 없어 발송할 수 없습니다")
 
 
 def _first(d: dict, keys) -> str:
