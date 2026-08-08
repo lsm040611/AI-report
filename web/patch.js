@@ -316,14 +316,20 @@ Object.assign(Component.prototype, {
         this.showToast('문장 생성 실패 — ' + st.error);
         return;
       }
-      const byPerson = {};
+      const byPerson = {}, byCard = {};
       (st.reports || []).forEach((r) => {
-        if (r.report_id) byPerson[r.name] = r.report_id;
+        if (!r.report_id) return;
+        byPerson[r.name] = r.report_id;
+        byCard[r.card_id] = r.report_id;
       });
       const split = splitMembers(st.cards || []);
-      this.setState({ reportIdByName: byPerson, engineFlags: st.flags || [],
+      // 청강생도 골랐을 때 리포트를 볼 수 있어야 판단할 수 있다
+      if (split.audit.selected === undefined) split.audit.selected = false;
+      this.setState({ reportIdByName: byPerson, reportIdByCard: byCard,
+                      engineFlags: st.flags || [],
                       mainMembers: split.regular, auditMemberData: split.audit });
-      const made = Object.keys(byPerson).length;
+      note('리포트 준비', { 카드별: byCard, 사람별: byPerson });
+      const made = Object.keys(byCard).length;
       this.showToast(made ? '리포트 ' + made + '편 준비됐습니다'
                           : '리포트가 만들어지지 않았습니다 — 플래그를 확인하십시오');
     };
@@ -333,12 +339,19 @@ Object.assign(Component.prototype, {
   // ── ③ 리포트 본문 · 근거 ──────────────────────────────────────────
   currentReportId() {
     const s = this.state;
-    const map = s.reportIdByName || {};
     if (s.view === 'admin-review') {
-      const m = (s.mainMembers || [])[s.selectedIdx];
-      return m ? map[m.name] : null;
+      // 카드 번호로 찾는다. 이름으로 찾으면 1차수·2차수를 같이 올렸을 때
+      // 같은 사람이 두 번 나오면서 한쪽이 덮여 사라진다.
+      const sel = s.auditMemberData && s.auditMemberData.selected
+        ? s.auditMemberData
+        : (s.mainMembers || [])[s.selectedIdx];
+      if (!sel) return null;
+      const byCard = s.reportIdByCard || {};
+      return byCard[sel.cardId] || (s.reportIdByName || {})[sel.name] || null;
     }
-    if (s.view === 'member-report') return map[s.memberName] || null;
+    if (s.view === 'member-report') {
+      return (s.reportIdByName || {})[s.memberName] || null;
+    }
     return null;
   },
 
@@ -692,6 +705,26 @@ Object.assign(Component.prototype, {
       b.onclick = () => history.back();
       document.body.appendChild(b);
     }
+
+    // 만들어진 리포트로 가는 문. 새로 고치면 화면 상태는 날아가지만
+    // 리포트는 서버에 남아 있다 — 그걸 찾아갈 길이 화면 안에만 있으면 안 된다.
+    if (!document.getElementById('hr-list')) {
+      const a = document.createElement('a');
+      a.id = 'hr-list';
+      a.href = '/list';
+      a.target = '_blank';
+      a.textContent = '만들어진 리포트 ↗';
+      a.title = '새로 고쳐도 남아 있는 목록';
+      a.setAttribute('style', [
+        'position:fixed', 'right:16px', 'top:14px', 'z-index:9000',
+        'height:30px', 'padding:0 14px', 'font-size:12.5px',
+        'line-height:30px', 'border-radius:999px', 'text-decoration:none',
+        'border:1px solid rgba(0,0,0,.14)', 'background:rgba(255,255,255,.92)',
+        'color:#3a3a3a', 'backdrop-filter:blur(6px)',
+        'box-shadow:0 1px 4px rgba(0,0,0,.10)',
+      ].join(';'));
+      document.body.appendChild(a);
+    }
     // 첫 화면에서는 숨긴다 — 돌아갈 곳이 앱 바깥밖에 없다
     const home = this.state.view === 'landing';
     b.style.display = home ? 'none' : '';
@@ -749,6 +782,16 @@ Component.prototype._syncReport = function () {
   if (!id) this._bodyShown = null;
   if (id && s.view === 'member-report') this.injectReportBody(id);
   if (id && s.view === 'admin-review') this.loadEvidenceList(id);
+
+  // 왜 안 뜨는지 화면에서 알 수 있게. 상태는 React 안에 있어 콘솔에서
+  // 들여다볼 수 없으므로 여기 꺼내 둔다.
+  HR_DEBUG.state = {
+    view: s.view, 고른자리: s.selectedIdx,
+    명단: (s.mainMembers || []).map((m) => m.name + '#' + m.cardId),
+    리포트: s.reportIdByCard || null,
+    지금리포트: id || null,
+    문장: (s.engineSentences || []).length,
+  };
 
   if (s.view === 'admin-validate') {
     this.paintUploadHeader();
@@ -812,14 +855,23 @@ Component.prototype.renderVals = function () {
   }
 
   // 검수 화면 — 문장과 근거를 실제 리포트에서 가져온다
-  if (s.engineSentences) {
-    props.reviewFeedbackSentences = s.engineSentences.map((sent) => ({
+  if (s.view === 'admin-review') {
+    const list = s.engineSentences || [];
+    props.reviewFeedbackSentences = list.map((sent) => ({
       ...sent,
       bg: s.reviewSelectedSentenceId === sent.id
         ? 'var(--surface-pearl)' : 'transparent',
       onSelect: () => this.showEvidence(this.currentReportId(), sent.id),
     }));
     props.reviewEvidence = s.engineEvidence || null;
+    // 비어 있을 때 아무것도 안 보이면 고장인지 아직인지 알 수 없다
+    if (!list.length) {
+      const why = !this.currentReportId()
+        ? '이 사람의 리포트가 아직 없습니다 — 생성이 끝나면 채워집니다'
+        : '이 리포트에는 AI 가 만든 문장이 없습니다 (원문만 실렸습니다)';
+      props.reviewFeedbackSentences = [
+        { id: '_', text: why, bg: 'transparent', onSelect: () => {} }];
+    }
   }
 
   // '리포트 생성' 버튼이 켜지는 조건.

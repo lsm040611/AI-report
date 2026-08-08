@@ -260,6 +260,92 @@ def index():
     return HTMLResponse(INDEX.replace("__MODE__", mode_banner()), headers=NO_CACHE)
 
 
+LIST_PAGE = """<!doctype html><html lang=ko><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>만들어진 리포트</title><style>
+body{font-family:'Malgun Gothic',sans-serif;background:#F0E8D6;color:#231D18;
+     margin:0;padding:36px 16px 80px;line-height:1.7}
+.s{max-width:820px;margin:0 auto;background:#fff;border:1px solid #E2D7C0;
+   border-top:6px solid #DA1B33;border-radius:3px;padding:30px 34px}
+h1{font-size:23px;margin:0 0 4px}
+p.m{color:#6E655C;font-size:13px;margin:0 0 20px}
+h2{font-size:15px;margin:26px 0 8px;padding-top:16px;border-top:1px solid #EFE8D9}
+h2:first-of-type{border-top:0;padding-top:0}
+h2 span{font-weight:400;font-size:12.5px;color:#6E655C;margin-left:8px}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+td,th{border-bottom:1px solid #EFE8D9;padding:9px 6px;text-align:left}
+th{font-size:11.5px;color:#6E655C;font-weight:600}
+a{color:#DA1B33;font-weight:700;text-decoration:none}
+.no{color:#6E655C;font-weight:400}
+.empty{background:#FBF5E4;border:1px dashed #E2D7C0;border-radius:6px;
+       padding:26px;text-align:center;color:#6E655C;font-size:13.5px}
+</style></head><body><div class=s>
+<h1>만들어진 리포트</h1>
+<p class=m>화면을 새로 고쳐도 여기는 그대로입니다. 링크를 열면 리포트가 뜨고,
+브라우저에서 <b>Ctrl+P → PDF로 저장</b> 하면 파일로 받을 수 있습니다.</p>
+__BODY__
+<p style="font-size:12.5px;color:#6E655C;margin-top:26px">
+<a href="/">← 처음으로</a> · <a href="/roster/setup">사원 명부</a> ·
+<a href="/simple">간단 업로드</a></p>
+</div></body></html>"""
+
+
+@app.get("/list", response_class=HTMLResponse)
+def report_list():
+    """만들어진 리포트 전부. 화면 상태와 상관없이 언제든 열린다.
+
+    프로토타입은 새로 고치면 처음 화면으로 돌아간다 — 화면이 기억을 갖고
+    있지 않기 때문이다. 그런데 리포트는 서버에 남아 있다. 그것을 볼 길이
+    화면 안에만 있으면, 새로 고침 한 번에 방금 만든 것을 못 찾게 된다.
+    """
+    from models import Card, Course, Report
+    from pipeline.rules.base import is_sendable
+    from database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        cards = db.query(Card).order_by(Card.id.desc()).all()
+        titles = {c.course_id: c.title for c in db.query(Course).all()}
+        groups: dict = {}
+        for c in cards:
+            cid = (c.card_json.get("context") or {}).get("_course_id")
+            key = titles.get(cid) or c.course_name or "과정 미상"
+            groups.setdefault(key, []).append(c)
+
+        if not groups:
+            body = ('<div class=empty>아직 만들어진 리포트가 없습니다.<br>'
+                    '<a href="/">처음 화면</a>에서 평가지를 올려 주세요.</div>')
+        else:
+            parts = []
+            for title, rows in groups.items():
+                made = sum(1 for c in rows if c.report)
+                trs = []
+                for c in rows:
+                    ok, why = is_sendable(c.card_json)
+                    link = (f'<a href="/reports/{c.report.id}/html" '
+                            f'target=_blank>리포트 열기 ↗</a>'
+                            if c.report else '<span class=no>아직 없음</span>')
+                    send = ("보낼 수 있음" if ok
+                            else f'<span class=no>{_esc(why)}</span>')
+                    trs.append(f"<tr><td>{_esc(c.person_name)}</td>"
+                               f"<td>{_esc(c.person_id or '')}</td>"
+                               f"<td>{_esc(c.round_label or '')}</td>"
+                               f"<td>{link}</td><td>{send}</td></tr>")
+                parts.append(
+                    f"<h2>{_esc(title)}<span>{made}/{len(rows)}편</span></h2>"
+                    f"<table><tr><th>이름</th><th>사번</th><th>차수</th>"
+                    f"<th>리포트</th><th>발송</th></tr>{''.join(trs)}</table>")
+            body = "".join(parts)
+        return HTMLResponse(LIST_PAGE.replace("__BODY__", body), headers=NO_CACHE)
+    finally:
+        db.close()
+
+
+def _esc(s) -> str:
+    import html
+    return html.escape(str(s or ""))
+
+
 @app.get("/favicon.ico")
 def favicon():
     """탭 아이콘. 없으면 브라우저가 요청마다 404 를 콘솔에 남겨,
