@@ -26,6 +26,58 @@ class Upload(Base):
     cards: Mapped[list["Card"]] = relationship(back_populates="upload")
 
 
+class UploadDraft(Base):
+    """판정만 끝나고 아직 카드가 되지 않은 업로드 (UI 통합 지점 ①→②).
+
+    UI 는 파일을 올린 뒤 **검증 화면에서 담당자 확인을 받고** 나서야 카드를
+    만든다. 그 사이에 판정 결과를 어딘가 붙들고 있어야 하는데, 카드로 만들어
+    두면 담당자가 취소했을 때 지워야 할 것이 생긴다. 그래서 확정 전 단계는
+    카드가 아니라 여기에 둔다 — 버려도 아무것도 남지 않는다.
+    """
+    __tablename__ = "upload_drafts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    stored_path: Mapped[str] = mapped_column(String(512))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    status: Mapped[str] = mapped_column(String(16), default="analyzed", index=True)
+    # 판정 결과 전문 — POST /uploads/analyze 가 돌려준 그대로
+    analysis: Mapped[Any] = mapped_column(JSON, default=dict)
+    # 담당자가 확정한 값 (commit 시 기록). 엔진은 이 값을 재판정하지 않는다.
+    confirmed: Mapped[Any] = mapped_column(JSON, default=dict, nullable=True)
+    upload_id: Mapped[Optional[int]] = mapped_column(ForeignKey("uploads.id"))
+
+
+class Course(Base):
+    """과정 마스터. courseId 발급 주체는 엔진이다 (통합 명세 §5-5 의 답).
+
+    회차(1차·2차)는 여기 두지 않는다. 회차는 카드에 이미 있고, 과정은
+    그 카드들을 묶는 이름일 뿐이다. 이 줄이 늘어나는 것은 새 과정이 생길
+    때뿐이어야 한다.
+    """
+    __tablename__ = "courses"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    course_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    source_type: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    instructor: Mapped[Optional[str]] = mapped_column(String(64))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    created_by: Mapped[Optional[str]] = mapped_column(String(64))
+
+
+class CourseAlias(Base):
+    """표기 변형 사전.
+
+    같은 과정이 파일마다 '리더십교육' · '리더십 교육' · '리더십 과정' 으로
+    들어온다. 담당자가 한 번 "이건 그 과정이다"라고 확정하면 그 표기를 여기
+    적어 두고, 다음 업로드부터는 묻지 않는다 (핸드오프 v2 §4-4).
+    """
+    __tablename__ = "course_aliases"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    alias: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    course_id: Mapped[str] = mapped_column(String(64), index=True)
+    confirmed_by: Mapped[Optional[str]] = mapped_column(String(64))
+
+
 class Card(Base):
     """개인 1명분 정규화 결과. card_json 이 계약 v0.5 스키마 전문."""
     __tablename__ = "cards"

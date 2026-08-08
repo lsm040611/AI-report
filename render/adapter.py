@@ -19,7 +19,7 @@ from typing import Dict, List, Optional
 from pipeline.rules.base import quote_allowed
 
 from .radar import legend_html, radar_svg
-from .template import runs_html
+from .template import EMPHASIS, runs_html
 
 # --------------------------------------------------------------------------
 EYEBROW = {
@@ -45,6 +45,41 @@ PROGRAM_KEYS = ("과정명", "특강명", "진단명", "프로그램", "교육�
 
 
 # ══════════════════════════════════════════════════════════════
+# 문장 ↔ 근거 색인
+# ══════════════════════════════════════════════════════════════
+class Sentences:
+    """AI 가 만든 문장마다 id 를 붙이고 그 근거를 나란히 적어 둔다.
+
+    UI 검수 화면의 R-16 근거 대조가 문장을 클릭하면 이 표를 조회한다
+    (통합 명세 §2-③). 지금까지 근거는 카드 안에만 있었고 화면에서
+    문장과 이어 볼 방법이 없었다 — 그 다리를 여기서 놓는다.
+    """
+
+    def __init__(self, card: dict):
+        prov = card.get("provenance") or {}
+        row = prov.get("row") or prov.get("rows")
+        parts = [prov.get("file"), prov.get("sheet"),
+                 f"{row}행" if row else None]
+        self.ref = " › ".join(str(p) for p in parts if p)
+        self.items: List[dict] = []
+
+    def add(self, text: str, rule_id: str = "", quote: str = "") -> str:
+        sid = f"s{len(self.items) + 1}"
+        self.items.append({
+            "sentenceId": sid,
+            "aiText": re.sub(r"<[^>]+>", "", text or "").strip(),
+            "ruleId": rule_id,
+            "sourceRef": self.ref,
+            "sourceText": f'"{quote}"' if quote else "",
+        })
+        return sid
+
+
+def _quotes_of(g: dict) -> List[str]:
+    return [(e.get("quote") or "").strip() for e in (g.get("evidence") or [])]
+
+
+# ══════════════════════════════════════════════════════════════
 def to_presentation_card(card: dict,
                          growth: Optional[dict] = None,
                          repeat: Optional[List[dict]] = None,
@@ -57,6 +92,7 @@ def to_presentation_card(card: dict,
     person = card.get("person") or {}
     context = card.get("context") or {}
     scale = _scale(card)
+    sid = Sentences(card)
 
     sections: List[dict] = []
     sections.append(_glance(card, stype, scale, peer_n, growth))
@@ -70,13 +106,13 @@ def to_presentation_card(card: dict,
         sections.append(_scores(card, scale, peer_avg or {}, peer_label,
                                 growth, stype))
 
-    sections.extend(_narratives(card, stype))
-    sections.extend(_themes(card))
+    sections.extend(_narratives(card, stype, sid))
+    sections.extend(_themes(card, sid))
     sections.append(_fixnotes(card))
 
     # 암기 문장 카드가 있으면 그것이 곧 실천 항목이다 — 같은 말을 두 번 쓰지 않는다
-    memorize = _memorize(card, stype, repeat)
-    sections.append(memorize or _todo(card, stype))
+    memorize = _memorize(card, stype, repeat, sid)
+    sections.append(memorize or _todo(card, stype, sid))
     # 범례는 강사가 색·굵기로 표시한 것이 실제로 있을 때만 쓸모가 있다.
     # 진단서베이는 강조 표기가 아예 없어서 '고칠 표현 / 권장 표현 / 핵심 개념'
     # 설명만 덩그러니 남는다 — 없는 표기를 설명하는 꼴이라 뺀다.
@@ -101,6 +137,8 @@ def to_presentation_card(card: dict,
             "items": _meta_items(context),
         },
         "sections": [s for s in sections if s],
+        # 문장 id ↔ 근거. 화면에는 나오지 않고 GET /reports/{id}/evidence 가 쓴다.
+        "evidence": sid.items,
         "footer": {"team": team, "lines": lines},
     }
 
@@ -345,7 +383,8 @@ def _radar(card: dict, scale: dict, growth: Optional[dict]) -> dict:
     return {"radar": svg, "radarLegend": legend_html(series), "radarNote": note}
 
 
-def _memorize(card: dict, stype: str, repeat: Optional[List[dict]]) -> dict:
+def _memorize(card: dict, stype: str, repeat: Optional[List[dict]],
+              sid: Sentences) -> dict:
     """암기 문장 카드 — AI 코칭 파트."""
     g = next((x for x in _generated(card, "R-17")
               if x.get("task") == "curate_memorize" and (x.get("text") or "").strip()),
@@ -370,8 +409,10 @@ def _memorize(card: dict, stype: str, repeat: Optional[List[dict]]) -> dict:
 
     head = ("MEMORIZE BY NEXT SESSION" if stype == "누적교육"
             else "APPLY IN YOUR NEXT TALK")
+    quotes = _quotes_of(g)
     return {"kind": "memorize", "title": "다음까지 외울 문장", "tint": True,
             "head": head, "badge": badge,
+            "sid": sid.add(g["text"], "R-17", quotes[0] if quotes else ""),
             "sentence": _highlight(_safe(g["text"]), parts), "parts": parts,
             "closingHtml": _safe(extra.get("closing") or "")}
 
@@ -397,13 +438,14 @@ def _highlight(sentence: str, parts: List[dict]) -> str:
     """암기 문장 안에서 각 조각이 어느 교정 표현인지 색으로 잇는다.
 
     문장 전체를 한 덩어리로 두면 '어디가 강사 표현인지'가 사라진다.
-    색은 리포트 범례와 같은 것을 쓴다 — 초록=권장, 빨강=고칠, 노랑=핵심.
+    클래스는 리포트 범례와 같은 것을 쓴다 — 색은 스타일시트가 정한다.
     """
     for p in parts:
         q = _safe(p.get("quote") or "")
         if not q or q not in sentence:
             continue
-        cls = {"fix": "fix", "issue": "bad", "key": "key"}.get(p.get("kind"), "fix")
+        cls = EMPHASIS.get({"issue": "bad"}.get(p.get("kind"), p.get("kind")),
+                           EMPHASIS["fix"])
         sentence = sentence.replace(q, f'<em class="{cls}">{q}</em>', 1)
     return sentence
 
@@ -462,7 +504,7 @@ def _tone(v, scale: dict) -> str:
 CURATED_TITLE = "이 지점을 이렇게 보면 좋습니다"
 
 
-def _narratives(card: dict, stype: str) -> List[dict]:
+def _narratives(card: dict, stype: str, sid: Sentences) -> List[dict]:
     """강사 서술은 원문 그대로 싣고, 개선점에는 코멘트를 덧붙인다.
 
     원문이 본문이다 — 강사가 무엇을 봤는지는 그 사람의 문장으로 전달되어야 한다.
@@ -488,7 +530,7 @@ def _narratives(card: dict, stype: str) -> List[dict]:
             section = {"kind": "narrative", "tone": None,
                        "title": STRENGTH_TITLE.get(stype, "잘하신 점"),
                        "mergeWithPrev": bool(out)}
-            _fill_body(section, nar, runs)
+            _fill_body(section, nar, runs, sid)
             out.append(section)
             continue
 
@@ -497,18 +539,22 @@ def _narratives(card: dict, stype: str) -> List[dict]:
 
         section = {"kind": "narrative", "title": "함께 살펴보면 좋을 점",
                    "tone": "gap", "mergeWithPrev": bool(out)}
-        _fill_body(section, nar, runs)
+        _fill_body(section, nar, runs, sid)
         if curated and not commented:
             # 개선점 열이 여럿이면 코멘트는 첫 칸에만 붙인다
+            quotes = _quotes_of(curated)
             section.setdefault("notes", []).insert(
                 0, {"accent": True, "title": CURATED_TITLE,
+                    "sid": sid.add(curated["text"], "R-17",
+                                   quotes[0] if quotes else _plain_text(runs)),
                     "html": _safe(curated["text"])})
             commented = True
         out.append(section)
     return out
 
 
-def _fill_body(section: dict, nar: dict, runs: List[dict]) -> None:
+def _fill_body(section: dict, nar: dict, runs: List[dict],
+               sid: Sentences) -> None:
     """본문을 채운다. 영어 코멘트면 한국어 번역을 본문으로 올린다.
 
     계약 R-13: 원문 보존 + 번역 병기. 받는 사람이 먼저 읽어야 하는 것은
@@ -517,6 +563,8 @@ def _fill_body(section: dict, nar: dict, runs: List[dict]) -> None:
     """
     translated = (nar.get("translation_ko") or "").strip()
     if nar.get("language") == "en" and translated:
+        # 번역문은 AI 가 만든 문장이므로 근거(=영어 원문)와 이어 둔다
+        section["sid"] = sid.add(translated, "R-13", _plain_text(runs))
         section["html"] = _safe(translated)
         section["notes"] = [{"title": "강사 코멘트 원문", "html": runs_html(runs)}]
     else:
@@ -544,10 +592,15 @@ THEME_TITLE = {
 }
 
 
-def _themes(card: dict) -> List[dict]:
+def _themes(card: dict, sid: Sentences) -> List[dict]:
     out = []
     for g in _generated(card, "R-11"):
-        items = [{"html": _safe(line)} for line in _lines(g.get("text"))]
+        quotes = _quotes_of(g)
+        items = []
+        for i, line in enumerate(_lines(g.get("text"))):
+            items.append({"html": _safe(line),
+                          "sid": sid.add(line, "R-11",
+                                         quotes[i] if i < len(quotes) else "")})
         if not items:
             continue
         title, lead = THEME_TITLE.get(g.get("role") or "",
@@ -591,7 +644,7 @@ def _fixnotes(card: dict) -> dict:
 # ══════════════════════════════════════════════════════════════
 # 실천 체크리스트 (R-17 생성물)
 # ══════════════════════════════════════════════════════════════
-def _todo(card: dict, stype: str) -> dict:
+def _todo(card: dict, stype: str, sid: Sentences) -> dict:
     """실천 체크리스트. 항목 아래에 근거가 된 강사 코멘트를 함께 보여 준다.
 
     R-16이 요구하는 '근거 연결'을 담당자 화면에만 두지 않고 리포트에도 드러낸다.
@@ -608,10 +661,10 @@ def _todo(card: dict, stype: str) -> dict:
         if g.get("task") == "curate_gap_comment":
             continue                    # 그쪽은 개선점 문단이라 체크리스트가 아니다
         lines = _lines(g.get("text"))
-        quotes = [(e.get("quote") or "").strip() for e in (g.get("evidence") or [])]
+        quotes = _quotes_of(g)
         for i, line in enumerate(lines):
-            item = {"html": _safe(line)}
             quote = quotes[i] if i < len(quotes) else ""
+            item = {"html": _safe(line), "sid": sid.add(line, "R-17", quote)}
             # 항목 문장이 원문을 거의 그대로 옮긴 경우엔 같은 말을 두 번 쓰지 않는다
             if show_quote and quote and _norm(quote)[:16] not in _norm(line):
                 item["sub"] = f"강사 코멘트: {quote[:90]}"

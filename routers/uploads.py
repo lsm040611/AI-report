@@ -9,13 +9,18 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
+from pydantic import BaseModel, Field
+
 from config import AUTO_APPROVE, STORAGE_DIR, mode_banner
 from database import get_db
 from generation import drain
-from models import (Card, CompetencyMapping, Handoff, PersonResolution,
-                    RosterEntry, Upload)
+from models import (Card, CompetencyMapping, Course, CourseAlias, Handoff,
+                    PersonResolution, RosterEntry, Upload, UploadDraft)
+from pipeline import courses as coursematch
 from pipeline import run_pipeline
+from pipeline.analyze import analyze
 from pipeline.rules.base import is_sendable, max_severity
+from contract import SOURCE_TYPES
 from routers.reports import build_report
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
@@ -141,6 +146,249 @@ def _add_totals(response: Dict[str, Any], entries: List[dict]) -> None:
     errors = [e["error"] for e in entries if e.get("error")]
     if errors:
         response["file_errors"] = errors
+
+
+# ══════════════════════════════════════════════════════════════
+# UI 통합 지점 ① — 파일 업로드 → 판정
+# ══════════════════════════════════════════════════════════════
+@router.post("/analyze")
+def analyze_upload(file: UploadFile = File(..., description="xlsx 파일 한 개"),
+                   entryCourseKey: Optional[str] = Query(
+                       None, description="과정 카드에서 진입한 경우의 과정 id"),
+                   db: Session = Depends(get_db)):
+    """카드를 만들지 않고 **판정만** 한다.
+
+    담당자가 검증 화면에서 유형·과정을 확인하고 오류 행을 처리한 뒤에
+    `POST /uploads/{draftId}/commit` 을 부르면 그때 카드가 만들어진다.
+    여기서 취소하면 남는 것은 저장된 파일 하나뿐이다.
+    """
+    name = (file.filename or "").strip()
+    if not name.lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(400, f"xlsx 파일만 지원합니다 — {name or '이름 없음'}")
+
+    os.makedirs(STORAGE_DIR, exist_ok=True)
+    path = os.path.join(STORAGE_DIR, os.path.basename(name))
+    with open(path, "wb") as out:            # 원본은 그대로 보관, 이후 읽기만
+        shutil.copyfileobj(file.file, out)
+
+    try:
+        result = analyze(path,
+                         known_courses=_known_courses(db),
+                         aliases=_aliases(db),
+                         roster=_roster(db),
+                         entry_course_key=entryCourseKey)
+    except Exception as exc:                 # noqa: BLE001
+        raise HTTPException(400, f"엑셀을 읽지 못했습니다 — "
+                                 f"{type(exc).__name__}: {exc}")
+
+    draft = UploadDraft(filename=name, stored_path=path, analysis=result)
+    db.add(draft)
+    db.commit()
+    return {"draftId": draft.id, **result}
+
+
+@router.get("/drafts/{draft_id}")
+def get_draft(draft_id: int, db: Session = Depends(get_db)):
+    draft = db.get(UploadDraft, draft_id)
+    if not draft:
+        raise HTTPException(404, "판정 결과 없음")
+    return {"draftId": draft.id, "status": draft.status,
+            "confirmed": draft.confirmed or None, "uploadId": draft.upload_id,
+            **(draft.analysis or {})}
+
+
+# ══════════════════════════════════════════════════════════════
+# UI 통합 지점 ② — 검증 확정 → 카드 생성
+# ══════════════════════════════════════════════════════════════
+class RowFix(BaseModel):
+    rowNumber: int
+    field: str
+    value: Optional[str] = None
+    label: Optional[str] = Field(None, description="field=score 일 때 어느 역량인지")
+
+
+class ConfirmedCourse(BaseModel):
+    mode: str = Field(..., description="link | create")
+    courseId: Optional[str] = None
+    newTitle: Optional[str] = Field(None, description="mode=create 일 때만")
+
+
+class CommitRequest(BaseModel):
+    confirmedSourceType: str
+    confirmedCourse: ConfirmedCourse
+    confirmedWave: Optional[int] = None
+    rowFixes: List[RowFix] = []
+    excludedRows: List[int] = []
+    operator: str = "담당자"
+    generate: bool = Field(True, description="문장 생성까지 이어서 돌릴지")
+
+
+@router.post("/{draft_id}/commit")
+def commit_draft(draft_id: int, req: CommitRequest,
+                 db: Session = Depends(get_db)):
+    """담당자 확정값을 반영해 카드를 만든다.
+
+    확정값은 **그대로 수용한다.** 엔진이 다르게 판정했더라도 다시 판정하지
+    않는다 (통합 명세 §5-4). 담당자가 화면에서 본 것과 결과가 달라지는 것보다
+    엔진이 틀린 채로 남는 편이 낫다 — 틀렸으면 다음 업로드에서 고치면 된다.
+    """
+    draft = db.get(UploadDraft, draft_id)
+    if not draft:
+        raise HTTPException(404, "판정 결과 없음")
+    if draft.upload_id:
+        raise HTTPException(409, f"이미 카드를 만든 판정입니다 — "
+                                 f"업로드 {draft.upload_id}")
+    if req.confirmedSourceType not in SOURCE_TYPES:
+        raise HTTPException(400, f"모르는 유형입니다 — {req.confirmedSourceType} "
+                                 f"(가능: {', '.join(SOURCE_TYPES)})")
+
+    course = _resolve_course(db, req, draft)
+
+    confirmed = {
+        "sourceType": req.confirmedSourceType,
+        "courseId": course["courseId"],
+        "courseTitle": course["title"],
+        "wave": req.confirmedWave,
+        "rowFixes": [f.model_dump() for f in req.rowFixes],
+        "excludedRows": req.excludedRows,
+        "operator": req.operator,
+    }
+
+    try:
+        result = run_pipeline(draft.stored_path,
+                              roster=_roster(db),
+                              competency_map=_comp_map(db),
+                              auto_approve=False,      # 확정값이 이미 승인이다
+                              confirmed=confirmed)
+    except Exception as exc:                 # noqa: BLE001
+        raise HTTPException(400, f"카드를 만들지 못했습니다 — "
+                                 f"{type(exc).__name__}: {exc}")
+
+    upload = Upload(filename=draft.filename, stored_path=draft.stored_path,
+                    warnings=result["warnings"])
+    db.add(upload)
+    db.flush()
+    for card_json in result["cards"]:
+        db.add(_to_row(upload.id, card_json))
+    db.flush()
+    _queue_handoffs(db, upload.id, result["handoffs"])
+
+    draft.upload_id = upload.id
+    draft.status = "committed"
+    draft.confirmed = confirmed
+    db.commit()
+
+    out = {
+        "draftId": draft.id, "uploadId": upload.id,
+        "courseId": course["courseId"], "courseTitle": course["title"],
+        "courseCreated": course["created"],
+        "cards": _card_briefs(db, upload.id),
+        "flags": _flag_list(db, upload.id),
+        "warnings": result["warnings"],
+    }
+    if req.generate:
+        out["generation"] = drain(db, upload_id=upload.id)
+        out["reports"] = _build_all(db, upload.id)
+        out["flags"] = _flag_list(db, upload.id)
+    return out
+
+
+def _resolve_course(db: Session, req: CommitRequest, draft: UploadDraft) -> dict:
+    """확정된 과정을 붙이거나 새로 만든다. courseId 발급 주체는 엔진이다."""
+    c = req.confirmedCourse
+    analysis = draft.analysis or {}
+    raw_title = ((analysis.get("courseMatch") or {}).get("suggestedTitle") or
+                 draft.filename)
+
+    if c.mode == "link":
+        if not c.courseId:
+            raise HTTPException(400, "mode=link 에는 courseId 가 필요합니다")
+        found = db.query(Course).filter(Course.course_id == c.courseId).first()
+        if not found:
+            raise HTTPException(404, f"모르는 과정입니다 — {c.courseId}")
+        _remember_alias(db, raw_title, found.course_id, req.operator)
+        return {"courseId": found.course_id, "title": found.title, "created": False}
+
+    if c.mode != "create":
+        raise HTTPException(400, f"mode 는 link 또는 create 입니다 — {c.mode}")
+
+    title = (c.newTitle or raw_title or "제목 없는 과정").strip()
+    cid = coursematch.issue_course_id(title)
+    exists = db.query(Course).filter(Course.course_id == cid).first()
+    if exists:
+        # 같은 이름으로 두 번 만들려는 경우. 새로 만들지 않고 그 과정에 붙인다.
+        _remember_alias(db, raw_title, exists.course_id, req.operator)
+        return {"courseId": exists.course_id, "title": exists.title, "created": False}
+
+    db.add(Course(course_id=cid, title=title,
+                  source_type=req.confirmedSourceType,
+                  instructor=_ctx(analysis, ("강사", "진행자")),
+                  created_by=req.operator))
+    db.flush()
+    _remember_alias(db, raw_title, cid, req.operator)
+    return {"courseId": cid, "title": title, "created": True}
+
+
+def _remember_alias(db: Session, raw_title: Optional[str], course_id: str,
+                    operator: str) -> None:
+    """담당자가 확정한 표기를 사전에 적어 둔다 — 다음 업로드부터는 묻지 않는다."""
+    key = coursematch.normalize(raw_title or "")
+    if not key:
+        return
+    if db.query(CourseAlias).filter(CourseAlias.alias == key).first():
+        return
+    db.add(CourseAlias(alias=key, course_id=course_id, confirmed_by=operator))
+
+
+def _ctx(analysis: dict, keys) -> Optional[str]:
+    for k, v in (analysis.get("context") or {}).items():
+        if any(want in str(k) for want in keys):
+            return str(v)
+    return None
+
+
+def _known_courses(db: Session) -> List[dict]:
+    out = []
+    for c in db.query(Course).all():
+        rounds = [r for (r,) in db.query(Card.round_label)
+                  .filter(Card.card_json["context"]["_course_id"]
+                          .as_string() == c.course_id)
+                  .distinct().all() if r]
+        out.append({"courseId": c.course_id, "title": c.title,
+                    "sourceType": c.source_type, "instructor": c.instructor,
+                    "rounds": sorted(rounds)})
+    return out
+
+
+def _aliases(db: Session) -> Dict[str, str]:
+    return {a.alias: a.course_id for a in db.query(CourseAlias).all()}
+
+
+def _card_briefs(db: Session, upload_id: int) -> List[dict]:
+    out = []
+    for c in db.query(Card).filter(Card.upload_id == upload_id).all():
+        ok, reason = is_sendable(c.card_json)
+        out.append({"cardId": c.id, "name": c.person_name,
+                    "empId": c.person_id, "status": c.person_status,
+                    "maxSeverity": c.max_severity,
+                    "sendable": ok, "blockedBy": reason or None})
+    return out
+
+
+def _flag_list(db: Session, upload_id: int) -> List[dict]:
+    """UI 검수 화면 배지에 그대로 쓰이는 형태. severity 4종만 나간다."""
+    out = []
+    for c in db.query(Card).filter(Card.upload_id == upload_id).all():
+        for f in c.card_json.get("flags", []):
+            if f.get("resolved"):
+                continue
+            out.append({"cardId": c.id, "empId": c.person_id,
+                        "name": c.person_name,
+                        "severity": f.get("severity"),
+                        "code": f.get("code"),
+                        "message": f.get("message") or f.get("action") or
+                                   f.get("code")})
+    return out
 
 
 @router.post("/{upload_id}/finish")

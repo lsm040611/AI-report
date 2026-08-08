@@ -311,21 +311,28 @@ def case_two_line_header_and_alias():
 
 def case_english_comment_translation():
     """영어 강사 코멘트는 번역이 붙으면 한국어가 본문이 된다."""
-    from render.adapter import _fill_body
+    from render.adapter import Sentences, _fill_body
 
     nar = {"language": "en", "translation_ko": "마무리를 서두르는 장면이 있었습니다.",
            "runs": [{"text": "You still rush the closing.", "emphasis": None}]}
+    sid = Sentences({"provenance": {"file": "평가표.xlsx", "sheet": "3차", "row": 21}})
     section = {}
-    _fill_body(section, nar, nar["runs"])
+    _fill_body(section, nar, nar["runs"], sid)
     check("번역이 본문", "마무리를 서두르는" in (section.get("html") or ""), section.get("html"))
     check("영어 원문은 아래에 남음",
           "rush the closing" in (section.get("notes") or [{}])[0].get("html", ""),
           section.get("notes"))
+    check("번역문에 문장 id 가 붙음", section.get("sid") == "s1", section.get("sid"))
+    check("근거는 영어 원문", "rush the closing" in sid.items[0]["sourceText"],
+          sid.items[0])
+    check("출처 표기", sid.items[0]["sourceRef"] == "평가표.xlsx › 3차 › 21행",
+          sid.items[0]["sourceRef"])
 
     # 번역이 아직 없으면 원문을 그대로 싣는다
     section2 = {}
-    _fill_body(section2, {"language": "en", "runs": nar["runs"]}, nar["runs"])
+    _fill_body(section2, {"language": "en", "runs": nar["runs"]}, nar["runs"], sid)
     check("번역 없으면 원문 유지", "runs" in section2 and "html" not in section2, section2)
+    check("사람이 쓴 원문에는 id 를 붙이지 않음", "sid" not in section2, section2)
 
 
 def case_emphasis_reinterpreted():

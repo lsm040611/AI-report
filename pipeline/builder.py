@@ -202,15 +202,24 @@ def _apply_common(card: dict, ctx: RuleContext, note: str) -> None:
 
 # --------------------------------------------------------------------------
 def judge_source_type(card: dict) -> dict:
+    """카드 한 장의 유형 판정. 판정 자체는 아래 함수가 한다."""
+    return judge_from_context(card.get("context", {}), card.get("direction"))
+
+
+def judge_from_context(context: dict, direction: Optional[str]) -> dict:
     """누적교육 / 단발특강 / 진단서베이 판정 + 근거.
+
+    카드가 되기 전(업로드 판정 화면)과 카드가 된 뒤(검수) 양쪽에서 부른다.
+    두 곳의 판정이 다르면 담당자가 본 화면과 실제 결과가 어긋나므로
+    판정 자리는 반드시 하나여야 한다.
 
     계약상 판정만으로는 다음 단계로 못 간다.
     confirmed_by_operator 가 True 가 되어야 진행된다.
     """
-    context = card.get("context", {})
+    context = context or {}
     keys = " ".join(str(k) for k in context.keys())
 
-    if card.get("direction") == "aggregated_responses":
+    if direction == "aggregated_responses":
         return {"type": "진단서베이",
                 "evidence": "데이터 방향이 'N응답→1인'이고 평가자 관계 열 존재",
                 "confirmed_by_operator": False}

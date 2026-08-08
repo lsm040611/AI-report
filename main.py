@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from config import AUTO_APPROVE, MODEL, USE_LLM, mode_banner
 from database import Base, engine
-from routers import cards, dashboard, handoff, reports, uploads
+from routers import cards, dashboard, handoff, insights, reports, uploads
 
 Base.metadata.create_all(bind=engine)
 
@@ -29,6 +29,7 @@ app.include_router(uploads.router)
 app.include_router(cards.router)
 app.include_router(handoff.router)
 app.include_router(reports.router)
+app.include_router(insights.router)
 app.include_router(dashboard.router)
 
 
@@ -46,6 +47,17 @@ async def unhandled(request: Request, exc: Exception):
         "where": f"{request.method} {request.url.path}",
         "traceback": tb.strip().splitlines()[-6:],
     })
+
+
+@app.get("/contract")
+def contract_vocabulary():
+    """UI 가 화면을 그리는 데 필요한 고정 어휘 전부.
+
+    UI 트랙이 통합 명세 §5 에서 요청한 확인 사항(issueCode 고정 집합,
+    severity 4종, 섹션 id)의 답이 이 한 번의 호출에 다 들어 있다.
+    """
+    import contract
+    return contract.describe()
 
 
 @app.get("/rules")

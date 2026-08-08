@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import html as _html
 import math
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 # ══════════════════════════════════════════════════════════════
 # 1. 스타일 — 시안 v2 확정본
@@ -129,10 +129,12 @@ h3{font-size:14.5px;font-weight:700;color:var(--ink);margin:26px 0 12px}
   padding:4px 0 4px 13px;margin-top:14px;line-height:1.7}
 
 /* ── 레이더 차트 ── */
-.radarwrap{margin:2px 0 0;padding:4px 0 0}
-.radar-legend{justify-content:center;gap:10px 22px;margin:2px 0 20px;font-size:12.5px;color:var(--muted)}
+/* 차트는 본문보다 좁게 둔다. 폭을 꽉 채우면 그림 하나가 한 화면을 덮어
+   정작 읽어야 할 점수·코멘트가 밀린다. */
+.radarwrap{margin:0 auto;padding:2px 0 0;max-width:400px}
+.radar-legend{justify-content:center;gap:10px 22px;margin:10px 0 6px;font-size:12.5px;color:var(--muted)}
 .radar-legend .it{gap:7px}
-.radar-note{font-size:12.5px;color:var(--muted);text-align:center;margin:-12px 0 20px}
+.radar-note{font-size:12.5px;color:var(--muted);text-align:center;margin:0 auto 22px;max-width:420px;line-height:1.6}
 
 /* ── 암기 문장 카드 ── */
 .mcard{border:1px solid var(--line);border-radius:5px;overflow:hidden;background:var(--paper)}
@@ -162,6 +164,7 @@ h3{font-size:14.5px;font-weight:700;color:var(--ink);margin:26px 0 12px}
   font-weight:600;padding:0 12px 9px 0;border-bottom:1.5px solid var(--line)}
 .gtable td{padding:14px 12px 14px 0;border-bottom:1px solid var(--line-2);vertical-align:middle}
 .gtable td.n{font-family:var(--mono);font-weight:700;white-space:nowrap;font-size:15.5px}
+.gtable td.n.faint{color:var(--faint)}
 .gtable .nm{font-weight:700;font-size:15.5px;letter-spacing:-.01em}
 .gtable .nm span{font-weight:400;color:var(--muted);font-size:13px;margin-left:5px}
 .dbar{position:relative;height:22px;min-width:110px}
@@ -191,10 +194,14 @@ h3{font-size:14.5px;font-weight:700;color:var(--ink);margin:26px 0 12px}
   padding:20px 24px;font-size:16px;line-height:1.95;white-space:pre-wrap}
 .narr + .narr{margin-top:14px}
 .narr.gap{border-left-color:var(--sk-red)}
-em.bad{font-style:normal;color:var(--sk-red-deep);background:#FBD9DF;
+/* 강조 3종. 클래스명은 뜻이고 색은 여기서만 정한다 — UI 에 얹을 때는 이 세 줄을
+   공통 디자인 시스템 토큰으로 갈아끼우면 되고, 본문 HTML 은 손대지 않아도 된다. */
+em.em-issue-expression{font-style:normal;color:var(--sk-red-deep);background:#FBD9DF;
   padding:1px 4px;border-radius:2px;font-weight:600}
-em.fix{font-style:normal;font-weight:700;color:var(--up);background:#CFE7E0;padding:1px 4px;border-radius:2px}
-em.key{font-style:normal;font-weight:700;background:#FBEDBE;padding:1px 4px;border-radius:2px}
+em.em-corrected-expression{font-style:normal;font-weight:700;color:var(--up);
+  background:#CFE7E0;padding:1px 4px;border-radius:2px}
+em.em-key-concept{font-style:normal;font-weight:700;background:#FBEDBE;
+  padding:1px 4px;border-radius:2px}
 
 /* ── 표현 교정 노트 ── */
 .fixgrid{display:grid;gap:14px}
@@ -302,12 +309,18 @@ footer .brand{font-size:12px;letter-spacing:.1em;color:var(--sk-red);font-weight
 # 2. 유틸
 # ══════════════════════════════════════════════════════════════
 
-# 강조 서식 키 매핑 — 파서(R-05)가 내는 키와 짧은 키 둘 다 받는다
+# 강조 서식 키 매핑 — 파서(R-05)가 내는 키와 짧은 키 둘 다 받는다.
+#
+# 클래스명이 색이 아니라 **뜻**인 것이 요점이다. 통합 명세 §2-③ 이 요구한다 —
+# 엔진은 인라인 색상을 넣지 않고, 색은 공통 디자인 시스템 토큰이 정한다.
+# 그래야 UI 에 얹었을 때와 PDF 로 뽑았을 때의 서식이 같아진다.
 EMPHASIS = {
-    "issue_expression": "bad",      # 원본 붉은색   → 고칠 표현
-    "corrected_expression": "fix",  # 원본 굵게+밑줄 → 권장 표현
-    "key_concept": "key",           # 원본 굵게     → 핵심 개념
-    "bad": "bad", "fix": "fix", "key": "key",
+    "issue_expression": "em-issue-expression",       # 원본 붉은색    → 고칠 표현
+    "corrected_expression": "em-corrected-expression",  # 굵게+밑줄   → 권장 표현
+    "key_concept": "em-key-concept",                 # 원본 굵게      → 핵심 개념
+    "bad": "em-issue-expression",
+    "fix": "em-corrected-expression",
+    "key": "em-key-concept",
 }
 
 
@@ -431,7 +444,7 @@ def _growth(s: dict) -> str:
                 body.append(
                     f'<tr><td class="nm">{esc(r.get("name"))}{sub}</td>'
                     f'<td colspan="3"><span class="pill">{label}</span></td>'
-                    f'<td class="n" style="color:var(--faint)">{fmt(r.get("curr"), digits)}</td></tr>')
+                    f'<td class="n faint">{fmt(r.get("curr"), digits)}</td></tr>')
                 continue
 
             d = r.get("delta")
@@ -527,7 +540,7 @@ def _memorize(s: dict) -> str:
             kind = p.get("kind") or "fix"
             label = {"fix": "✓ 권장 표현", "issue": "✕ 고칠 표현",
                      "key": "핵심 개념"}.get(kind, "출처")
-            cls = {"fix": "fix", "issue": "bad", "key": "key"}.get(kind, "fix")
+            cls = EMPHASIS.get({"issue": "bad"}.get(kind, kind), EMPHASIS["fix"])
             quote = (f'<span class="q"><em class="{cls}">'
                      f'{esc(p["quote"])}</em></span> ' if p.get("quote") else "")
             rows.append(f'<div class="part"><span class="tag k-{esc(kind)}">{label}</span>'
@@ -537,7 +550,7 @@ def _memorize(s: dict) -> str:
              if s.get("closingHtml") else "")
     return ('<div class="mcard">' + done +
             f'<div class="head">{esc(s.get("head") or "MEMORIZE BY NEXT SESSION")}</div>'
-            f'<div class="say">{s["sentence"]}</div>'
+            f'<div class="say"{sid_attr(s)}>{s["sentence"]}</div>'
             + parts + close + '</div>') + note_boxes(s.get("notes"))
 
 
@@ -573,14 +586,14 @@ def _relation(s: dict) -> str:
 def _narrative(s: dict) -> str:
     """강사 서술 블록. `runs`(원문) 또는 `html`(재작성본) 중 하나를 받는다."""
     blocks = s.get("blocks") or [{"runs": s.get("runs"), "tone": s.get("tone"),
-                                  "html": s.get("html")}]
+                                  "html": s.get("html"), "sid": s.get("sid")}]
     out = []
     for b in blocks:
         body = b.get("html") or ("" if is_blank(b.get("runs")) else runs_html(b["runs"]))
         if not body:
             continue
         cls = "narr gap" if b.get("tone") == "gap" else "narr"
-        out.append(f'<div class="{cls}">{body}</div>')
+        out.append(f'<div class="{cls}"{sid_attr(b)}>{body}</div>')
     if not out:
         return ""                       # 본문이 없으면 안내 박스만 남기지 않는다
     return "".join(out) + note_boxes(s.get("notes"))
@@ -592,7 +605,7 @@ def _themes(s: dict) -> str:
     out = []
     for t in s["items"]:
         cnt = f'<div class="cnt">{esc(t["count"])}</div>' if t.get("count") else ""
-        out.append(f'<div class="theme"><div class="txt">'
+        out.append(f'<div class="theme"{sid_attr(t)}><div class="txt">'
                    f'{t.get("html") or esc(t.get("text"))}</div>{cnt}</div>')
     return "".join(out) + note_boxes(s.get("notes"))
 
@@ -621,7 +634,7 @@ def _todo(s: dict) -> str:
     lis = []
     for i in s["items"]:
         sub = f'<span class="sub">{esc(i["sub"])}</span>' if i.get("sub") else ""
-        lis.append(f'<li><span class="box"></span><div>'
+        lis.append(f'<li{sid_attr(i)}><span class="box"></span><div>'
                    f'{i.get("html") or esc(i.get("text"))}{sub}</div></li>')
     when = f'<span class="when">{esc(s["when"])}</span>' if s.get("when") else ""
     src = f'<div class="src">{esc(s["src"])}</div>' if s.get("src") else ""
@@ -634,9 +647,9 @@ def _legend(s: dict) -> str:
     items = []
     if s.get("showMarks", True):
         items += [
-            '<span class="it"><em class="bad">고칠 표현</em> 고쳐야 할 표현</span>',
-            '<span class="it"><em class="fix">권장 표현</em> 대신 쓸 표현</span>',
-            '<span class="it"><em class="key">핵심 개념</em> 기억할 개념</span>',
+            f'<span class="it"><em class="{EMPHASIS["bad"]}">고칠 표현</em> 고쳐야 할 표현</span>',
+            f'<span class="it"><em class="{EMPHASIS["fix"]}">권장 표현</em> 대신 쓸 표현</span>',
+            f'<span class="it"><em class="{EMPHASIS["key"]}">핵심 개념</em> 기억할 개념</span>',
         ]
     if s.get("showDelta"):
         items.append('<span class="it"><span class="delta p">▲ 상승</span> · '
@@ -656,6 +669,17 @@ RENDERERS = {
 }
 
 
+def sid_attr(d: dict) -> str:
+    """AI 가 만든 문장에 붙는 표식.
+
+    UI 검수 화면이 이 속성으로 문장을 집어 근거를 조회한다
+    (GET /reports/{id}/evidence). 사람이 쓴 원문에는 붙지 않는다 —
+    붙어 있으면 "이 문장은 생성물"이라는 뜻이다.
+    """
+    sid = d.get("sid")
+    return f' data-sentence-id="{esc(sid)}"' if sid else ""
+
+
 def note_boxes(notes) -> str:
     if is_blank(notes):
         return ""
@@ -666,7 +690,7 @@ def note_boxes(notes) -> str:
             continue
         title = f'<span class="h">{esc(n["title"])}</span>' if n.get("title") else ""
         cls = "note-box accent" if n.get("accent") else "note-box"
-        out.append(f'<div class="{cls}">{title}{n.get("html", "")}</div>')
+        out.append(f'<div class="{cls}"{sid_attr(n)}>{title}{n.get("html", "")}</div>')
     return "".join(out)
 
 
@@ -674,36 +698,80 @@ def note_boxes(notes) -> str:
 # 4. 문서 조립
 # ══════════════════════════════════════════════════════════════
 
-def render_sections(sections) -> str:
+# 섹션 kind → UI 목차의 4개 묶음 (통합 명세 §2-③).
+# UI 의 스크롤 스파이가 data-section 을 읽고, 순서가 곧 목차 순서다.
+SECTION_GROUP = {
+    "glance": "items", "scores": "items", "relation": "items",
+    "narrative": "feedback", "themes": "feedback", "fixnotes": "feedback",
+    "growth": "compare",
+    "todo": "next", "memorize": "next", "legend": "next", "note": "next",
+}
+GROUP_ORDER = ("items", "feedback", "compare", "next")
+GROUP_LABEL = {"items": "항목별 평가", "feedback": "서술 피드백",
+               "compare": "성장 비교", "next": "다음 학습 제안"}
+
+
+def group_sections(sections) -> Dict[str, list]:
+    """섹션을 묶음별로 가른다. 묶음 안의 순서는 넣은 순서 그대로다."""
+    buckets: Dict[str, list] = {g: [] for g in GROUP_ORDER}
+    for s in sections or []:
+        buckets[SECTION_GROUP.get(s.get("kind"), "items")].append(s)
+    return buckets
+
+
+def render_sections(sections, anchors: bool = True) -> str:
+    """묶음마다 `<div data-section>` 을 두르고 그 안에 섹션을 넣는다.
+
+    묶음이 비면 껍데기도 만들지 않는다 — 통합 명세가 빈 섹션을 금지한다.
+    이전 회차가 없으면 compare 묶음이 통째로 사라지고, UI 는 목차에서도
+    그 항목을 지운다.
+    """
+    buckets = group_sections(sections)
     no, prev_rendered = 0, False
     out = []
-    for s in sections or []:
-        fn = RENDERERS.get(s.get("kind"))
-        if fn is None:
-            raise ValueError(f"알 수 없는 섹션 kind: {s.get('kind')}")
-        inner = fn(s)
-        if not inner:
-            continue                     # 내용이 비면 섹션째로 생략
 
-        cls = []
-        if s.get("tint"):
-            cls.append("tint")
-        if not prev_rendered:
-            cls.append("first")
-        elif s.get("mergeWithPrev"):
-            cls.append("merge")
-        prev_rendered = True
+    for gid in GROUP_ORDER:
+        chunk = []
+        for s in buckets[gid]:
+            fn = RENDERERS.get(s.get("kind"))
+            if fn is None:
+                raise ValueError(f"알 수 없는 섹션 kind: {s.get('kind')}")
+            inner = fn(s)
+            if not inner:
+                continue                 # 내용이 비면 섹션째로 생략
 
-        head = ""
-        if s.get("title"):
-            no += 1
-            lead = f'<p class="lead">{esc(s["lead"])}</p>' if s.get("lead") else ""
-            head = (f'<h2><span class="no">{no:02d}</span>{esc(s["title"])}</h2>{lead}')
+            cls = []
+            if s.get("tint"):
+                cls.append("tint")
+            if not prev_rendered:
+                cls.append("first")
+            elif s.get("mergeWithPrev"):
+                cls.append("merge")
+            prev_rendered = True
 
-        style = ' style="padding-top:24px;padding-bottom:24px"' if s.get("compact") else ""
-        cls_attr = f' class="{" ".join(cls)}"' if cls else ""
-        out.append(f"<section{cls_attr}{style}>{head}{inner}</section>")
+            head = ""
+            if s.get("title"):
+                no += 1
+                lead = f'<p class="lead">{esc(s["lead"])}</p>' if s.get("lead") else ""
+                head = f'<h2><span class="no">{no:02d}</span>{esc(s["title"])}</h2>{lead}'
+
+            style = (' style="padding-top:24px;padding-bottom:24px"'
+                     if s.get("compact") else "")
+            cls_attr = f' class="{" ".join(cls)}"' if cls else ""
+            chunk.append(f"<section{cls_attr}{style}>{head}{inner}</section>")
+
+        if not chunk:
+            continue
+        body = "\n".join(chunk)
+        out.append(f'<div data-section="{gid}">\n{body}\n</div>' if anchors else body)
     return "\n".join(out)
+
+
+def toc(sections) -> List[dict]:
+    """실제로 렌더된 묶음만 추린 목차. UI 사이드바가 그대로 쓴다."""
+    buckets = group_sections(sections)
+    return [{"id": g, "label": GROUP_LABEL[g]} for g in GROUP_ORDER
+            if any(RENDERERS[s["kind"]](s) for s in buckets[g])]
 
 
 def render_masthead(card: dict) -> str:

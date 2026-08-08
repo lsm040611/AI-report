@@ -38,10 +38,106 @@ def json_safe(obj: Any) -> Any:
     return str(obj)
 
 
+def apply_confirmations(cards: List[dict], confirmed: dict,
+                        ctx: RuleContext) -> List[dict]:
+    """담당자가 검증 화면에서 확정한 것들을 카드에 새긴다.
+
+    고친 값은 **원본 엑셀이 아니라 카드에만** 반영된다. 원본은 검증 기준이라
+    손대지 않는다는 것이 계약의 첫 줄이고, 그래서 무엇을 무엇으로 바꿨는지
+    카드에 함께 남긴다 — 나중에 "이 점수 왜 다르지?"에 답할 수 있어야 한다.
+    """
+    excluded = {int(r) for r in (confirmed.get("excludedRows") or [])}
+    fixes: Dict[int, List[dict]] = {}
+    for f in (confirmed.get("rowFixes") or []):
+        fixes.setdefault(int(f["rowNumber"]), []).append(f)
+
+    stype = confirmed.get("sourceType")
+    kept = []
+    for card in cards:
+        rows = _card_rows(card)
+        if rows & excluded:
+            ctx.warnings.append(
+                f'{card["person"]["name"]} — 담당자가 제외한 행이라 카드를 만들지 않았습니다')
+            continue
+
+        if stype:
+            card["source_type"] = {
+                "type": stype,
+                "evidence": "담당자가 검증 화면에서 확정한 유형입니다 "
+                            "(엔진 재판정 없음)",
+                "confirmed_by_operator": True,
+                "confirmed_by": confirmed.get("operator") or "담당자",
+            }
+        if confirmed.get("courseId"):
+            card.setdefault("context", {})["_course_id"] = confirmed["courseId"]
+        if confirmed.get("wave"):
+            card.setdefault("context", {})["_wave"] = confirmed["wave"]
+
+        for rn in sorted(rows & set(fixes)):
+            for f in fixes[rn]:
+                _apply_fix(card, f, ctx)
+        kept.append(card)
+    return kept
+
+
+def _card_rows(card: dict) -> set:
+    prov = card.get("provenance") or {}
+    raw = prov.get("rows") or prov.get("row")
+    if raw is None:
+        return set()
+    if isinstance(raw, (list, tuple, set)):
+        return {int(x) for x in raw if str(x).isdigit()}
+    return {int(raw)} if str(raw).isdigit() else set()
+
+
+def _apply_fix(card: dict, fix: dict, ctx: RuleContext) -> None:
+    field, value = fix.get("field"), fix.get("value")
+    person = card.setdefault("person", {})
+    before = None
+
+    if field in ("empId", "duplicate"):
+        before, person["person_id"] = person.get("person_id"), value
+    elif field == "email":
+        before, person["email"] = person.get("email"), value
+    elif field == "name":
+        before, person["name"] = person.get("name"), value
+    elif field == "score":
+        before = _fix_score(card, fix)
+    else:
+        ctx.warnings.append(f"모르는 수정 필드라 건너뛰었습니다 — {field}")
+        return
+
+    card.setdefault("provenance", {}).setdefault("operator_fixes", []).append({
+        "row": fix.get("rowNumber"), "field": field,
+        "from": before, "to": value,
+        "by": fix.get("by") or "담당자",
+        "note": "원본 엑셀은 그대로이며 카드 생성 입력에만 반영되었습니다",
+    })
+
+
+def _fix_score(card: dict, fix: dict) -> object:
+    """점수 수정. 어느 역량인지는 label 로 짚는다."""
+    label = (fix.get("label") or "").strip()
+    for s in card.get("scores", []):
+        if not label or label in str(s.get("area") or s.get("name") or ""):
+            before = s.get("value")
+            s["value"] = float(fix["value"]) if fix.get("value") not in (None, "") else None
+            return before
+    return None
+
+
 def run_pipeline(path: str,
                  roster: Optional[dict] = None,
                  competency_map: Optional[dict] = None,
-                 auto_approve: bool = False) -> Dict[str, object]:
+                 auto_approve: bool = False,
+                 confirmed: Optional[dict] = None) -> Dict[str, object]:
+    """엑셀 → 카드.
+
+    `confirmed` 는 검증 화면에서 담당자가 확정한 것들이다
+    ({sourceType, courseId, courseTitle, wave, rowFixes, excludedRows}).
+    확정값이 오면 엔진은 그 자리를 **다시 판정하지 않는다** — 통합 명세 §5-4 의
+    답이 이 한 줄이다. 담당자가 본 화면과 결과가 달라지는 것이 가장 나쁘다.
+    """
     sheets = read_workbook(path)
 
     # R-08: 문항 정의가 별도 시트에 있으면 먼저 확보한다
@@ -73,6 +169,9 @@ def run_pipeline(path: str,
         if made:
             used_sheets.append(sheet.name)
             cards.extend(made)
+
+    if confirmed:
+        cards = apply_confirmations(cards, confirmed, ctx)
 
     if not cards:
         ctx.warnings.append(

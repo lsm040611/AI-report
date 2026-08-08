@@ -16,5 +16,10 @@ out_blind/
 # AI 재작성 주고받는 파일 — 단서를 걸렀어도 실제 응답 내용이다
 handoff_ai/
 
+# UI 트랙에 보낼 산출물. fixtures 를 돌려 만든 것이라 이름·코멘트가 그대로 들어 있다.
+# fixtures/ 를 커밋하지 않는 것과 같은 이유로 여기도 담지 않는다.
+#   다시 만들기: py -3.10 tools/make_handoff.py
+docs/engine_handoff/
+
 # API 키·메일 비밀번호. 절대 커밋하지 않는다.
 *.env
