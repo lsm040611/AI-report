@@ -463,16 +463,87 @@ Object.assign(Component.prototype, {
   },
 });
 
+// ── 뒤로가기 ────────────────────────────────────────────────────────
+// 이 앱은 화면 전환이 전부 상태값이라 방문 기록이 쌓이지 않는다. 그래서
+// 브라우저 뒤로가기를 누르면 앱 안에서 한 발 물러서는 게 아니라 앱을
+// 통째로 빠져나간다. 업로드까지 해 놓고 실수로 누르면 처음부터 다시다.
+//
+// 화면 이름만 기록에 남긴다. 올린 파일이나 만든 카드는 그대로 두고 화면만
+// 되돌린다 — 뒤로 갔다고 방금 만든 리포트가 사라지면 그게 더 놀랍다.
+const NAV = ['view', 'subTab'];
+
+function navKey(s) {
+  return NAV.map((k) => s[k]).join('|');
+}
+
+Object.assign(Component.prototype, {
+  _installHistory() {
+    if (this._historyOn) return;
+    this._historyOn = true;
+    this._navAt = navKey(this.state);
+    history.replaceState({ hr: this._navAt }, '');
+    window.addEventListener('popstate', (e) => {
+      const st = e.state && e.state.hr;
+      if (!st) return;
+      const parts = st.split('|');
+      const patch = {};
+      NAV.forEach((k, i) => { patch[k] = parts[i]; });
+      this._navAt = st;                       // 되돌린 것은 다시 쌓지 않는다
+      this._fromPop = true;
+      this.setState(patch);
+    });
+  },
+
+  _syncHistory() {
+    const now = navKey(this.state);
+    if (now === this._navAt) return;
+    if (this._fromPop) { this._fromPop = false; this._navAt = now; return; }
+    this._navAt = now;
+    history.pushState({ hr: now }, '');
+    this._paintBackButton();
+  },
+
+  // 화면 왼쪽 위에 작은 뒤로 버튼. 돌아갈 곳이 있을 때만 보인다.
+  _paintBackButton() {
+    let b = document.getElementById('hr-back');
+    if (!b) {
+      b = document.createElement('button');
+      b.id = 'hr-back';
+      b.type = 'button';
+      b.textContent = '← 뒤로';
+      b.title = '이전 화면으로 (브라우저 뒤로가기와 같습니다)';
+      b.setAttribute('style', [
+        'position:fixed', 'left:16px', 'top:14px', 'z-index:9000',
+        'height:30px', 'padding:0 14px', 'font-size:12.5px',
+        'font-family:inherit', 'border-radius:999px',
+        'border:1px solid rgba(0,0,0,.14)', 'background:rgba(255,255,255,.92)',
+        'color:#3a3a3a', 'cursor:pointer', 'backdrop-filter:blur(6px)',
+        'box-shadow:0 1px 4px rgba(0,0,0,.10)',
+      ].join(';'));
+      b.onclick = () => history.back();
+      document.body.appendChild(b);
+    }
+    // 첫 화면에서는 숨긴다 — 돌아갈 곳이 앱 바깥밖에 없다
+    const home = this.state.view === 'landing';
+    b.style.display = home ? 'none' : '';
+  },
+});
+
 // ── 화면이 바뀔 때마다 본문을 맞춰 넣는다 ──────────────────────────────
 const _mounted = Component.prototype.componentDidMount;
 const _updated = Component.prototype.componentDidUpdate;
 
 Component.prototype.componentDidMount = function () {
   if (_mounted) _mounted.call(this);
+  this._installHistory();
+  this._paintBackButton();
   this._syncReport();
 };
 Component.prototype.componentDidUpdate = function (a, b) {
   if (_updated) _updated.call(this, a, b);
+  this._installHistory();          // 마운트가 이미 지났을 수도 있다
+  this._syncHistory();
+  this._paintBackButton();
   this._syncReport();
 };
 Component.prototype._syncReport = function () {
