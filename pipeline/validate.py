@@ -34,7 +34,10 @@ def validate_sheet(sheet: Sheet, schema: DetectedSchema,
     name_col = schema.name_column
     emp_cols = schema.by_kind(EMP_ID)
     email_cols = schema.by_kind(EMAIL)
-    score_cols = [c for c in schema.by_kind(SCORE)] + list(schema.by_kind(SUMMARY))
+    # 원본 '평균' 열은 검사하지 않는다. 비어 있어도 R-06 이 다시 계산하고,
+    # 값이 있어도 재계산값과 다르면 그쪽에서 따로 잡는다. 여기서 또 경고를
+    # 내면 담당자가 아무 의미 없는 확인을 열 번 눌러야 한다.
+    score_cols = schema.by_kind(SCORE)
 
     for r in schema.data_rows:
         row = sheet.row(r)
@@ -52,15 +55,29 @@ def validate_sheet(sheet: Sheet, schema: DetectedSchema,
             found += _check_empid(_cell(row, c), excel_row, c.header)
         for c in email_cols:
             found += _check_email(_cell(row, c), excel_row, c.header)
-        for c in score_cols:
-            found += _check_score(_cell(row, c), excel_row, c.header, c.scale)
+
+        # 점수가 전부 비었으면 항목 수만큼 경고를 내지 않는다. 그건 항목마다
+        # 생긴 문제가 아니라 그 행 하나의 문제다 — 담당자에게도 한 줄로 보여야
+        # 무엇을 판단해야 하는지가 분명하다.
+        filled = [c for c in score_cols if _cell(row, c)]
+        if score_cols and not filled:
+            found.append(_issue("SCORE_MISSING", excel_row, "", None,
+                                f"점수가 하나도 없습니다 — {len(score_cols)}개 항목 전부 빈칸"))
+        else:
+            for c in score_cols:
+                found += _check_score(_cell(row, c), excel_row, c.header, c.scale)
 
         for f in found:
             f["name"] = name
             f["empId"] = next((_cell(row, c) for c in emp_cols if _cell(row, c)), "")
             rows.append(f)
 
-    rows += _check_duplicates(seen_names, roster_people)
+    # 진단서베이는 한 사람에 여러 응답이 달리는 것이 **정상 구조**다.
+    # 여기에 동명이인 검사를 걸면 응답 수만큼 경고가 쌓여, 담당자가 전건을
+    # 확인하기 전에는 리포트 생성 버튼이 열리지 않는다. 16행짜리 파일에
+    # 경고 16건이 뜬 적이 있다 — 사람이 겹친 게 아니라 원래 그런 파일이다.
+    if schema.direction != "aggregated_responses":
+        rows += _check_duplicates(seen_names, roster_people)
     rows.sort(key=lambda x: (x["rowNumber"], x["issueCode"]))
 
     total = len(schema.data_rows)

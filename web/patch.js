@@ -20,6 +20,18 @@ const TYPE_FROM_ENGINE = {
   '누적교육': 'accumulated', '단발특강': 'single', '진단서베이': 'diagnosis',
 };
 
+// 무슨 일이 있었는지 브라우저 콘솔에서 볼 수 있게 남긴다.
+// 화면만 보고는 "왜 안 되지"를 알 수 없어서, 개발자도구에 HR_DEBUG 를 쳐 보면
+// 마지막 판정 결과·마지막 오류가 그대로 나오게 해 둔다.
+const HR_DEBUG = { analyze: null, commit: null, lastError: null, calls: [] };
+window.HR_DEBUG = HR_DEBUG;
+
+function note(kind, detail) {
+  HR_DEBUG.calls.push({ kind, detail, at: new Date().toISOString() });
+  if (HR_DEBUG.calls.length > 40) HR_DEBUG.calls.shift();
+  console.log('[엔진] ' + kind, detail);
+}
+
 const API = {
   async get(path) {
     const r = await fetch(path, { credentials: 'same-origin' });
@@ -46,12 +58,16 @@ const API = {
   },
   // 서버가 준 이유를 그대로 보여 준다. "요청 실패" 라고만 뜨면 고칠 수가 없다.
   async _why(r) {
+    let msg;
     try {
       const j = await r.json();
-      return j.detail || j.message || (r.status + ' ' + r.statusText);
+      msg = j.detail || j.message || (r.status + ' ' + r.statusText);
     } catch (e) {
-      return r.status + ' ' + r.statusText;
+      msg = r.status + ' ' + r.statusText;
     }
+    HR_DEBUG.lastError = { url: r.url, status: r.status, message: msg };
+    console.error('[엔진] 실패', HR_DEBUG.lastError);
+    return msg;
   },
 };
 
@@ -106,6 +122,9 @@ Object.assign(Component.prototype, {
     this.showToast(file.name + ' 을(를) 읽는 중입니다…');
     try {
       const a = await API.upload(file);
+      HR_DEBUG.analyze = a;
+      note('판정', { 유형: a.sourceType.type, 과정: a.courseMatch,
+                     요약: a.summary, 문맥: a.context });
       const m = a.courseMatch || {};
       const uiType = TYPE_FROM_ENGINE[a.sourceType.type] || 'accumulated';
       this.setState({
@@ -125,6 +144,8 @@ Object.assign(Component.prototype, {
         validationRows: toValidationRows(a.rows),
         engineSummary: a.summary,
         engineWave: a.wave || null,
+        engineFileName: a.filename,
+        engineContext: a.context || {},
       });
       this.showToast('판정 완료 — ' + a.sourceType.type + ' · 인식 '
         + a.summary.recognized + '행');
@@ -165,8 +186,12 @@ Object.assign(Component.prototype, {
     };
     if (s.engineWave) body.confirmedWave = s.engineWave.suggested;
 
+    note('카드 생성 요청', body);
     try {
       const c = await API.post('/uploads/' + s.draftId + '/commit', body);
+      HR_DEBUG.commit = c;
+      note('카드 생성 결과', { 과정: c.courseTitle, 카드: (c.cards || []).length,
+                              리포트: (c.reports || []).length });
       const byPerson = {};
       (c.reports || []).forEach((r) => {
         if (r.report_id) byPerson[r.name] = r.report_id;
@@ -404,7 +429,39 @@ function insightText(host, lines) {
     .join('<br><br>') : '자동 인사이트를 낼 만한 자료가 아직 없습니다.';
 }
 
+// ── 검증 화면 머리말 ─────────────────────────────────────────────────
+// 파일명과 "2026.08.03 10:24 업로드 · 강사 박지훈" 이 마크업에 글자로 박혀
+// 있다. 무엇을 올리든 그 문구가 나온다 — 360 진단을 올렸는데 "리더십교육
+// 3차 평가결과.xlsx" 라고 나온 것이 이것이다. 실제 값으로 갈아끼운다.
+const DUMMY_FILE = '리더십교육_3차_평가결과.xlsx';
+
 Object.assign(Component.prototype, {
+  paintUploadHeader() {
+    const name = this.state.engineFileName;
+    if (!name) return;
+    const all = document.querySelectorAll('div');
+    for (let i = 0; i < all.length; i++) {
+      const n = all[i];
+      if (n.children.length || n.textContent.trim() !== DUMMY_FILE) continue;
+      n.textContent = name;
+      const sub = n.nextElementSibling;
+      if (sub && !sub.children.length) {
+        const ctx = this.state.engineContext || {};
+        const bits = Object.keys(ctx)
+          .filter((k) => k.indexOf('_') !== 0 && String(ctx[k]).trim())
+          .slice(0, 4)
+          .map((k) => k + ' ' + ctx[k]);
+        // 메타 블록이 없는 파일도 있다(360 응답데이터가 그렇다).
+        // 그럴 때 '정보 없음' 대신 파일에서 실제로 읽어 낸 것을 보여 준다.
+        const a = HR_DEBUG.analyze || {};
+        if (!bits.length && a.sheets) bits.push('시트 ' + a.sheets.join(', '));
+        if (!bits.length && a.summary) bits.push('인식 ' + a.summary.recognized + '행');
+        sub.textContent = bits.join(' · ') || '파일에서 읽은 정보 없음';
+      }
+      return;
+    }
+  },
+
   paintInsight() {
     const d = this.state.engineInsight;
     if (!d) return;
@@ -553,6 +610,11 @@ Component.prototype._syncReport = function () {
   if (id && s.view === 'member-report') this.injectReportBody(id);
   if (id && s.view === 'admin-review') this.loadEvidenceList(id);
 
+  if (s.view === 'admin-validate') {
+    this.paintUploadHeader();
+    this.loadCourseList();          // '다른 과정 선택' 목록을 엔진 것으로 채운다
+  }
+
   if (s.view === 'admin' && s.subTab === 'insight') {
     this.loadCourseList();
     this.loadInsight();
@@ -597,6 +659,44 @@ Component.prototype.renderVals = function () {
       onSelect: () => this.showEvidence(this.currentReportId(), sent.id),
     }));
     props.reviewEvidence = s.engineEvidence || null;
+  }
+
+  // 과정 연결 — 원래 함수들은 더미 상수(COURSE_LINK_SUGGESTIONS)와 더미 과정
+  // 목록(COURSES)을 본다. 그대로 두면 무엇을 올리든 '리더십 교육' 에 붙고,
+  // 새 과정을 만들면 엔진에 없는 adhoc-<시각> 키가 생겨 카드 생성이 404 로
+  // 실패한다. 리포트가 안 만들어지던 원인이 이것이다.
+  if (s.draftId) {
+    props.linkThisCourse = () => this.setState({
+      courseLinkStatus: 'linked',
+      linkedCourseKey: s.linkedCourseKey,          // 엔진이 준 courseId 그대로
+      courseLinkChoiceLabel: s.engineCourseTitle || s.courseLinkChoiceLabel,
+    });
+    props.confirmCreateCourse = () => {
+      const title = (s.newCourseName || '').trim();
+      if (!title) return;
+      // 실제 발급은 커밋 때 엔진이 한다 — 여기서 가짜 키를 만들지 않는다
+      this.setState({ courseLinkStatus: 'linked', linkedCourseKey: null,
+                      courseLinkChoiceLabel: title });
+    };
+    // 원래 함수는 입력칸을 비운다. 엔진이 읽어 낸 과정명을 미리 채워 둔다 —
+    // 매번 손으로 다시 적게 하면 표기가 조금씩 달라져 과정이 갈라진다.
+    props.openLinkCreate = () => this.setState({
+      courseLinkStatus: 'creating',
+      newCourseName: s.newCourseName || s.engineCourseTitle || '',
+    });
+    props.onLinkSelectChange = (e) => {
+      const key = e.target.value;
+      if (!key) return;
+      const c = (s.engineCourses || []).find((x) => x.courseId === key);
+      this.setState({ courseLinkStatus: 'linked', linkedCourseKey: key,
+                      courseLinkChoiceLabel: (c ? c.title : key) + ' (선택한 과정)' });
+    };
+    props.backToLinkIdle = () => this.setState({
+      courseLinkStatus: 'idle', newCourseName: '',
+      courseLinkChoiceLabel: '', linkedCourseKey: null,
+    });
+    props.linkSelectOptions = [{ value: '', label: '과정 검색·선택' }].concat(
+      (s.engineCourses || []).map((c) => ({ value: c.courseId, label: c.title })));
   }
 
   // 인사이트 — 과정 목록과 항목별 비교는 프롭으로, 나머지는 paintInsight 가 칠한다

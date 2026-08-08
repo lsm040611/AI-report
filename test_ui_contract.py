@@ -152,6 +152,49 @@ def case_row_fix_keeps_original():
               "from" in rec and "to" in rec and rec["to"] == "EMP-9999", rec)
 
 
+def case_gate_is_reachable():
+    """① 담당자가 실제로 통과할 수 있는 양의 경고만 나오는가.
+
+    화면의 '리포트 생성' 버튼은 오류 0 + 경고 전건 확인이라야 열린다.
+    '원래 그런 파일'인데 경고가 쏟아지면 담당자는 영원히 못 넘어간다.
+    실제로 두 번 그랬다 — 진단서베이의 반복 이름을 동명이인으로 잡았고,
+    점수 전부 빈 행에 항목 수만큼 경고를 냈다.
+    """
+    for fname, stype, _ in PLAN:
+        if not os.path.exists(os.path.join(FIXTURES, fname)):
+            continue
+        a = analyze(fname)
+        rows = a["rows"]
+        errs = [r for r in rows if r["severity"] == "error"]
+        warns = [r for r in rows if r["severity"] == "warning"]
+        n = a["summary"]["recognized"]
+        check(f"{fname[:22]} — 경고가 행 수를 넘지 않음",
+              len(warns) <= max(2, n // 3),
+              f"인식 {n}행에 경고 {len(warns)}건")
+        if stype == "진단서베이":
+            dupes = [r for r in rows if r["issueCode"] == "DUPLICATE_NAME"]
+            check("진단서베이의 반복 이름을 동명이인으로 잡지 않음", not dupes,
+                  f"{len(dupes)}건")
+        per_row = {}
+        for r in rows:
+            per_row[r["rowNumber"]] = per_row.get(r["rowNumber"], 0) + 1
+        piled = [k for k, v in per_row.items() if v >= 3]
+        check(f"{fname[:22]} — 한 행에 경고가 쌓이지 않음", not piled, piled)
+        check(f"{fname[:22]} — 오류 없이 넘어감", not errs,
+              [e["issueCode"] for e in errs])
+
+
+def case_every_sample_reaches_report():
+    """어떤 샘플을 올려도 리포트까지 도달하는가. 화면 연결의 최소 조건이다."""
+    for fname, stype, title in PLAN:
+        if not os.path.exists(os.path.join(FIXTURES, fname)):
+            continue
+        got = commit(analyze(fname), stype, (title or "") + " 도달시험" if title else None)
+        made = [r for r in (got.get("reports") or []) if r.get("report_id")]
+        check(f"{fname[:22]} — 리포트 {len(made)}편", bool(made),
+              got.get("warnings"))
+
+
 def case_report_body(upload: dict):
     """③ 본문 조각이 UI 계약대로 나오는가."""
     rid = next(x["report_id"] for x in upload["reports"] if x.get("report_id"))
@@ -248,9 +291,13 @@ def main() -> None:
     print("\n── ① 판정 (POST /uploads/analyze)")
     a = case_analyze_makes_no_cards()
 
+    print("\n── ① 담당자가 넘어갈 수 있는가 (검증 게이트)")
+    case_gate_is_reachable()
+
     print("\n── ② 카드 생성 (POST /uploads/{draftId}/commit)")
     case_commit_respects_operator(a)
     case_row_fix_keeps_original()
+    case_every_sample_reaches_report()
 
     print("\n── 세 유형을 다 태운다")
     uploads = []
