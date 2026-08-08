@@ -15,10 +15,16 @@ import html as _html
 import math
 from typing import List, Optional, Sequence
 
-W, H = 380, 330
 CX, CY = 190, 158
 R = 104
 LABEL_GAP = 20
+NAME_SIZE = 11.5
+BADGE_SIZE = 10.5
+PAD = 8                            # 그림 가장자리 여백
+
+# 뷰박스를 고정 크기로 두면 축이 셋일 때 아래쪽이 크게 빈다 — 삼각형은
+# 사각형보다 낮기 때문이다. 실제로 그린 것의 경계를 재서 잘라 낸다.
+W, H = 380, 330                    # 예전 고정 크기 (호환용 상수)
 
 
 def radar_svg(axes: Sequence[dict], series: Sequence[dict],
@@ -40,11 +46,7 @@ def radar_svg(axes: Sequence[dict], series: Sequence[dict],
     if hi <= lo:
         return ""
 
-    parts: List[str] = [
-        f'<svg viewBox="0 0 {W} {H}" role="img" '
-        f'style="width:100%;height:auto;display:block" '
-        f'aria-label="역량 레이더 차트">'
-    ]
+    parts: List[str] = []
 
     # ── 그물망 ────────────────────────────────────────────────
     for k in range(rings, 0, -1):
@@ -93,21 +95,35 @@ def radar_svg(axes: Sequence[dict], series: Sequence[dict],
                              f'fill="{color}"/>')
 
     # ── 축 라벨 + 증감 배지 ───────────────────────────────────
+    boxes = [(CX - R, CX + R, CY - R, CY + R)]      # 그물망이 차지하는 자리
     for i, ax in enumerate(axes):
         x, y = _pt(i, n, R + LABEL_GAP)
         anchor, dy = _anchor(i, n)
-        name = _esc(ax.get("name") or "")
+        name = str(ax.get("name") or "")
         parts.append(f'<text x="{x:.1f}" y="{y + dy:.1f}" text-anchor="{anchor}" '
-                     f'font-size="11.5" font-weight="700" fill="var(--ink)">{name}</text>')
+                     f'font-size="{NAME_SIZE}" font-weight="700" fill="var(--ink)">'
+                     f'{_esc(name)}</text>')
+        boxes.append(_text_box(x, y + dy, name, NAME_SIZE, anchor))
 
         sub = _badge(ax)
         if sub:
             text, color = sub
             parts.append(f'<text x="{x:.1f}" y="{y + dy + 13:.1f}" text-anchor="{anchor}" '
-                         f'font-size="10.5" font-weight="700" fill="{color}">{text}</text>')
+                         f'font-size="{BADGE_SIZE}" font-weight="700" fill="{color}">{text}</text>')
+            boxes.append(_text_box(x, y + dy + 13, text, BADGE_SIZE, anchor))
 
-    parts.append("</svg>")
-    return "".join(parts)
+    x0 = min(b[0] for b in boxes) - PAD
+    x1 = max(b[1] for b in boxes) + PAD
+    y0 = min(b[2] for b in boxes) - PAD
+    y1 = max(b[3] for b in boxes) + PAD
+    vw, vh = x1 - x0, y1 - y0
+
+    # max-width 를 원래 크기로 묶는다. 이게 없으면 시트 폭(약 690px)까지 늘어나
+    # 그림 하나가 화면을 다 덮는다.
+    head = (f'<svg viewBox="{x0:.0f} {y0:.0f} {vw:.0f} {vh:.0f}" role="img" '
+            f'style="width:100%;max-width:{vw:.0f}px;height:auto;display:block;'
+            f'margin:0 auto" aria-label="역량 레이더 차트">')
+    return head + "".join(parts) + "</svg>"
 
 
 def legend_html(series: Sequence[dict]) -> str:
@@ -135,6 +151,22 @@ def _anchor(i: int, n: int):
     anchor = "middle" if abs(cos) < 0.25 else ("start" if cos > 0 else "end")
     dy = 0 if abs(sin) < 0.25 else (10 if sin > 0 else -2)
     return anchor, dy
+
+
+def _text_box(x: float, y: float, text: str, size: float, anchor: str):
+    """글자가 차지할 자리를 어림한다 (x0, x1, y0, y1).
+
+    SVG 는 글자 폭을 알려 주지 않는다. 한글은 글자당 약 1em, 영문·숫자는
+    약 0.55em 로 잡으면 잘리지 않을 만큼은 맞는다.
+    """
+    w = sum(1.0 if ord(ch) > 0x2000 else 0.55 for ch in text) * size
+    if anchor == "start":
+        x0, x1 = x, x + w
+    elif anchor == "end":
+        x0, x1 = x - w, x
+    else:
+        x0, x1 = x - w / 2, x + w / 2
+    return x0, x1, y - size * 0.82, y + size * 0.28
 
 
 def _ratio(v, lo: float, hi: float) -> float:

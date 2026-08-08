@@ -28,7 +28,9 @@ AUTO_APPROVE = _flag("HR_AUTO_APPROVE", "1")
 
 # --- 생성 ----------------------------------------------------------------
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-MODEL = os.getenv("HR_MODEL", "claude-opus-5")
+# 리포트 문장 생성용 모델. 짧은 한국어 재작성이 대부분이라 Sonnet 으로 충분하고,
+# 같은 예산으로 훨씬 여러 번 돌려 볼 수 있다. HR_MODEL 로 바꿀 수 있다.
+MODEL = os.getenv("HR_MODEL", "claude-sonnet-5")
 EFFORT = os.getenv("HR_EFFORT", "medium")
 USE_LLM = bool(ANTHROPIC_API_KEY)
 

@@ -37,6 +37,11 @@ def _client_or_none():
     return _client
 
 
+def warm() -> None:
+    """여러 스레드가 동시에 부르기 전에 클라이언트를 미리 만들어 둔다."""
+    _client_or_none()
+
+
 # --------------------------------------------------------------------------
 def generate(rule_id: str, task: str, payload: dict) -> Dict[str, object]:
     """{text, evidence, engine, error?} 를 돌려준다. 예외를 밖으로 던지지 않는다."""
@@ -67,6 +72,15 @@ def generate(rule_id: str, task: str, payload: dict) -> Dict[str, object]:
             "task_label": label}
 
 
+# 거절 시 서버가 대체 모델로 재시도해 주는 기능. 쓸 수 있는 모델이 정해져 있어서,
+# 아무 모델에나 붙이면 400 이 나고 그 뒤로 모든 호출이 조용히 목 모드로 떨어진다.
+FALLBACK_MODELS = ("claude-opus-5", "claude-fable-5", "claude-mythos-5")
+
+
+def _supports_fallbacks(model: str) -> bool:
+    return any(model.startswith(m) for m in FALLBACK_MODELS)
+
+
 def _call(client, user_prompt: str, schema: dict) -> Optional[dict]:
     """Claude 호출. 구조화 출력으로 스키마를 강제한다.
 
@@ -85,16 +99,19 @@ def _call(client, user_prompt: str, schema: dict) -> Optional[dict]:
         },
     )
 
-    try:
-        # 안전 분류기가 거절하면 서버가 대체 모델로 자동 재시도한다.
-        resp = client.beta.messages.create(
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            **kwargs,
-        )
-    except TypeError:
-        # SDK 가 낡아 fallbacks 인자를 모르는 경우만 일반 경로로 내려간다.
-        # 예전에는 모든 예외를 여기서 삼켜, 400·429 까지 두 번씩 때렸다.
+    if _supports_fallbacks(MODEL):
+        try:
+            # 안전 분류기가 거절하면 서버가 대체 모델로 자동 재시도한다.
+            resp = client.beta.messages.create(
+                betas=["server-side-fallback-2026-07-01"],
+                fallbacks="default",
+                **kwargs,
+            )
+        except TypeError:
+            # SDK 가 낡아 fallbacks 인자를 모르는 경우만 일반 경로로 내려간다.
+            # 예전에는 모든 예외를 여기서 삼켜, 400·429 까지 두 번씩 때렸다.
+            resp = client.messages.create(**kwargs)
+    else:
         resp = client.messages.create(**kwargs)
 
     stop = getattr(resp, "stop_reason", None)

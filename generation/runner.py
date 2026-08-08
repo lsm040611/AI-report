@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -29,66 +31,102 @@ def drain(db: Session, upload_id: Optional[int] = None,
             return {"processed": 0, "accepted": 0, "rejected": 0, "rejects": []}
         q = q.filter(Handoff.card_id.in_(card_ids))
 
-    processed = accepted = rejected = 0
-    rejects: List[dict] = []
+    stats: Dict[str, object] = {"processed": 0, "accepted": 0,
+                                "rejected": 0, "rejects": []}
 
     # R-05(강조 의미 판정)가 먼저 돌아야 한다. 그 결과가 R-17 의 재료이기 때문이다.
-    pending = sorted(q.all(), key=lambda h: (h.rule_id not in PRIORITY_RULES, h.id))
+    pending = sorted(q.all(), key=lambda h: h.id)
+    first = [h for h in pending if h.rule_id in PRIORITY_RULES]
+    rest = [h for h in pending if h.rule_id not in PRIORITY_RULES]
     retagged: set = set()
 
-    for h in pending:
-        card = db.get(Card, h.card_id)
-        if card is None:
-            continue
+    _run_wave(db, first, operator, auto_accept, retagged, stats)
 
-        # 강조 판정이 바뀐 카드는, 뒤따르는 작업의 재료를 새로 뽑아 준다
-        if h.rule_id not in PRIORITY_RULES and h.card_id in retagged:
-            _refresh_payload(h, card)
+    # 강조 판정이 바뀐 카드는, 뒤따르는 작업의 재료를 새로 뽑아 준다
+    for h in rest:
+        if h.card_id in retagged:
+            card = db.get(Card, h.card_id)
+            if card is not None:
+                _refresh_payload(h, card)
 
-        result = worker.generate(h.rule_id, h.task, h.payload or {})
-        processed += 1
-
-        ok, reason = r16_verify_generated(
-            result, card.card_json, require_evidence=h.rule_id in EVIDENCE_REQUIRED)
-
-        h.result = result
-        if ok:
-            if reason:                       # 통과했지만 대조가 어긋난 건
-                result = {**result, "unverified": reason}
-                h.result = result
-            # 한 건이 터져도 나머지는 살린다. 예전에는 중간에 예외가 나면
-            # 그때까지의 처리가 통째로 롤백되어 큐가 손도 안 댄 상태로 남았다.
-            try:
-                _commit_one(db, h, card, result, operator, auto_accept, retagged)
-                accepted += 1 if auto_accept else 0
-            except Exception as exc:                       # noqa: BLE001
-                db.rollback()
-                h = db.get(Handoff, h.id)
-                if h is not None:
-                    h.status = "rejected"
-                    h.reject_reason = f"저장 실패 — {type(exc).__name__}: {exc}"
-                    db.commit()
-                rejected += 1
-                rejects.append({"handoff_id": h.id if h else None,
-                                "rule_id": h.rule_id if h else "",
-                                "person": card.person_name,
-                                "reason": f"저장 실패 — {type(exc).__name__}: {exc}"})
-            continue
-
-        if not ok:
-            h.status = "rejected"
-            # 워커가 이유를 알고 있으면 그쪽이 담당자에게 더 쓸모 있다
-            h.reject_reason = result.get("error") or reason
-            rejected += 1
-            rejects.append({"handoff_id": h.id, "rule_id": h.rule_id,
-                            "person": card.person_name,
-                            "reason": h.reject_reason})
-            continue
+    _run_wave(db, rest, operator, auto_accept, retagged, stats)
 
     db.commit()
-    return {"processed": processed, "accepted": accepted,
-            "rejected": rejected, "rejects": rejects,
-            "engine": worker.engine_name()}
+    stats["engine"] = worker.engine_name()
+    return stats
+
+
+# 한 번에 몇 건까지 같이 부를지. 호출은 대부분 응답을 기다리는 시간이라 겹쳐도 되지만,
+# 너무 많이 겹치면 사용량 한도(429)에 걸린다. 넉넉잡아 4 건.
+CONCURRENCY = max(1, int(os.getenv("HR_CONCURRENCY", "4")))
+
+
+def _run_wave(db: Session, handoffs: List[Handoff], operator: str,
+              auto_accept: bool, retagged: set, stats: Dict[str, object]) -> None:
+    """한 묶음을 겹쳐서 부르고, 저장은 한 건씩 순서대로 한다.
+
+    부르는 일만 나눠 맡긴다. DB 세션은 이 스레드 것이라 다른 스레드가 만지면 안 되고,
+    승인 순서도 원래대로 유지해야 결과가 매번 같다.
+    """
+    jobs = []
+    for h in handoffs:
+        card = db.get(Card, h.card_id)
+        if card is not None:
+            jobs.append((h, card, h.rule_id, h.task, dict(h.payload or {})))
+    if not jobs:
+        return
+
+    if len(jobs) == 1:
+        results = [worker.generate(*jobs[0][2:])]
+    else:
+        worker.warm()                      # 스레드가 저마다 클라이언트를 만들지 않도록
+        with ThreadPoolExecutor(max_workers=min(CONCURRENCY, len(jobs))) as pool:
+            # generate 는 예외를 밖으로 던지지 않는다 — 실패해도 목 결과가 돌아온다
+            results = list(pool.map(lambda j: worker.generate(*j[2:]), jobs))
+
+    for (h, card, *_), result in zip(jobs, results):
+        _accept_or_reject(db, h, card, result, operator, auto_accept, retagged, stats)
+
+
+def _accept_or_reject(db: Session, h: Handoff, card: Card, result: dict,
+                      operator: str, auto_accept: bool, retagged: set,
+                      stats: Dict[str, object]) -> None:
+    stats["processed"] += 1
+    ok, reason = r16_verify_generated(
+        result, card.card_json, require_evidence=h.rule_id in EVIDENCE_REQUIRED)
+
+    h.result = result
+    if not ok:
+        h.status = "rejected"
+        # 워커가 이유를 알고 있으면 그쪽이 담당자에게 더 쓸모 있다
+        h.reject_reason = result.get("error") or reason
+        stats["rejected"] += 1
+        stats["rejects"].append({"handoff_id": h.id, "rule_id": h.rule_id,
+                                 "person": card.person_name,
+                                 "reason": h.reject_reason})
+        return
+
+    if reason:                               # 통과했지만 대조가 어긋난 건
+        result = {**result, "unverified": reason}
+        h.result = result
+
+    # 한 건이 터져도 나머지는 살린다. 예전에는 중간에 예외가 나면
+    # 그때까지의 처리가 통째로 롤백되어 큐가 손도 안 댄 상태로 남았다.
+    try:
+        _commit_one(db, h, card, result, operator, auto_accept, retagged)
+        stats["accepted"] += 1 if auto_accept else 0
+    except Exception as exc:                                   # noqa: BLE001
+        db.rollback()
+        hid, rule_id = h.id, h.rule_id
+        h = db.get(Handoff, hid)
+        why = f"저장 실패 — {type(exc).__name__}: {exc}"
+        if h is not None:
+            h.status = "rejected"
+            h.reject_reason = why
+            db.commit()
+        stats["rejected"] += 1
+        stats["rejects"].append({"handoff_id": hid, "rule_id": rule_id,
+                                 "person": card.person_name, "reason": why})
 
 
 def _commit_one(db: Session, h: Handoff, card: Card, result: dict,
