@@ -78,9 +78,10 @@ const API = {
     if (!r.ok) throw new Error(await API._why(r));
     return r.json();
   },
-  async upload(file) {
+  async upload(files) {
     const fd = new FormData();
-    fd.append('file', file);
+    // 같은 이름(file)으로 여러 번 넣는다 — 서버가 목록으로 받는다
+    Array.prototype.forEach.call(files, (f) => fd.append('file', f));
     const r = await fetch('/uploads/analyze', {
       method: 'POST', credentials: 'same-origin', body: fd,
     });
@@ -102,12 +103,13 @@ const API = {
   },
 };
 
-function pickFile() {
+function pickFiles() {
   return new Promise((resolve) => {
     const el = document.createElement('input');
     el.type = 'file';
     el.accept = '.xlsx,.xlsm';
-    el.onchange = () => resolve(el.files && el.files[0]);
+    el.multiple = true;          // 1차수·2차수를 같이 올려야 성장 비교가 붙는다
+    el.onchange = () => resolve(el.files && el.files.length ? el.files : null);
     el.click();
   });
 }
@@ -167,11 +169,12 @@ Object.assign(Component.prototype, {
   // ── ① 업로드 → 판정 ───────────────────────────────────────────────
   // 드롭존이 부르던 가짜 함수. 이제 진짜 파일 선택창을 열고 엔진에 보낸다.
   async realUpload() {
-    const file = await pickFile();
-    if (!file) return;
-    this.showToast(file.name + ' 을(를) 읽는 중입니다…');
+    const files = await pickFiles();
+    if (!files) return;
+    const label = files.length === 1 ? files[0].name : files.length + '개 파일';
+    this.showToast(label + ' 을(를) 읽는 중입니다…');
     try {
-      const a = await API.upload(file);
+      const a = await API.upload(files);
       HR_DEBUG.analyze = a;
       note('판정', { 유형: a.sourceType.type, 과정: a.courseMatch,
                      요약: a.summary, 문맥: a.context });
@@ -242,10 +245,6 @@ Object.assign(Component.prototype, {
       HR_DEBUG.commit = c;
       note('카드 생성 결과', { 과정: c.courseTitle, 카드: (c.cards || []).length,
                               리포트: (c.reports || []).length });
-      const byPerson = {};
-      (c.reports || []).forEach((r) => {
-        if (r.report_id) byPerson[r.name] = r.report_id;
-      });
       const split = splitMembers(c.cards);
       this.setState({
         view: 'admin-review',
@@ -255,19 +254,62 @@ Object.assign(Component.prototype, {
         courseLinkChoiceLabel: c.courseTitle,
         mainMembers: split.regular,
         auditMemberData: split.audit,
-        reportIdByName: byPerson,
+        reportIdByName: {},
         engineFlags: c.flags || [],
         selectedIdx: 0,
         courseTypeOverride: { ...s.courseTypeOverride, [c.courseId]: s.reportType },
       });
-      const gen = c.generation || {};
-      this.showToast('카드 ' + (c.cards || []).length + '장 생성 · 문장 '
-        + (gen.accepted || 0) + '건'
-        + (gen.rejected ? ' (거절 ' + gen.rejected + '건)' : ''));
+      this.showToast('카드 ' + (c.cards || []).length + '장 생성 — '
+        + '문장을 만드는 중입니다…');
+      this.watchGeneration(c.uploadId);
     } catch (err) {
       this.setState({ validateGenerating: false });
       this.showToast('카드 생성 실패 — ' + err.message);
     }
+  },
+
+  // 문장 생성은 1분 넘게 걸린다. 응답을 붙들고 기다리면 느린 서버에서
+  // 중간에 끊기므로(502), 뒤에서 돌리고 여기서 몇 초마다 물어본다.
+  async watchGeneration(uploadId) {
+    if (this._watching === uploadId) return;
+    this._watching = uploadId;
+    const started = Date.now();
+
+    const tick = async () => {
+      if (this._watching !== uploadId) return;
+      let st;
+      try {
+        st = await API.get('/uploads/' + uploadId + '/status');
+      } catch (err) {
+        this._watching = null;
+        this.showToast('진행 상황을 못 읽었습니다 — ' + err.message);
+        return;
+      }
+      if (st.total) {
+        this.showToast('문장 ' + st.done + '/' + st.total + '건 생성 중…');
+      }
+      if (st.state === 'running' && Date.now() - started < 10 * 60 * 1000) {
+        setTimeout(tick, 3000);
+        return;
+      }
+      this._watching = null;
+
+      if (st.state === 'error') {
+        this.showToast('문장 생성 실패 — ' + st.error);
+        return;
+      }
+      const byPerson = {};
+      (st.reports || []).forEach((r) => {
+        if (r.report_id) byPerson[r.name] = r.report_id;
+      });
+      const split = splitMembers(st.cards || []);
+      this.setState({ reportIdByName: byPerson, engineFlags: st.flags || [],
+                      mainMembers: split.regular, auditMemberData: split.audit });
+      const made = Object.keys(byPerson).length;
+      this.showToast(made ? '리포트 ' + made + '편 준비됐습니다'
+                          : '리포트가 만들어지지 않았습니다 — 플래그를 확인하십시오');
+    };
+    setTimeout(tick, 1500);
   },
 
   // ── ③ 리포트 본문 · 근거 ──────────────────────────────────────────

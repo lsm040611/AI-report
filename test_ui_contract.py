@@ -75,7 +75,21 @@ def commit(draft: dict, stype: str, title=None) -> dict:
         body["confirmedWave"] = draft["wave"]["suggested"]
     r = client.post(f"/uploads/{draft['draftId']}/commit", json=body)
     assert r.status_code == 200, r.text[:300]
-    return r.json()
+    got = r.json()
+    if got.get("job"):
+        got.update(wait_for(got["uploadId"]))
+    return got
+
+
+def wait_for(upload_id: int, limit: float = 120.0) -> dict:
+    """생성이 끝날 때까지 기다린다. 화면도 같은 방식으로 물어본다."""
+    import time
+    deadline = time.monotonic() + limit
+    while True:
+        st = client.get(f"/uploads/{upload_id}/status").json()
+        if st["state"] != "running" or time.monotonic() > deadline:
+            return st
+        time.sleep(0.3)
 
 
 # ══════════════════════════════════════════════════════════════

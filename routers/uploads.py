@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import threading
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
 from config import AUTO_APPROVE, STORAGE_DIR, mode_banner
-from database import get_db
+from database import SessionLocal, get_db
 from generation import drain
 from models import (Card, CompetencyMapping, Course, CourseAlias, Handoff,
                     PersonResolution, RosterEntry, Upload, UploadDraft)
@@ -152,49 +153,111 @@ def _add_totals(response: Dict[str, Any], entries: List[dict]) -> None:
 # UI 통합 지점 ① — 파일 업로드 → 판정
 # ══════════════════════════════════════════════════════════════
 @router.post("/analyze")
-def analyze_upload(file: UploadFile = File(..., description="xlsx 파일 한 개"),
+def analyze_upload(file: List[UploadFile] = File(..., description="xlsx 파일 (여러 개 가능)"),
                    entryCourseKey: Optional[str] = Query(
                        None, description="과정 카드에서 진입한 경우의 과정 id"),
                    db: Session = Depends(get_db)):
     """카드를 만들지 않고 **판정만** 한다.
 
+    여러 개를 함께 받는다. 1차수와 2차수를 같이 올리면 회차 간 성장 비교가
+    그 자리에서 완성되기 때문이다 — 나눠 올리면 두 번째 파일을 올릴 때까지
+    첫 리포트에 비교 섹션이 없다.
+
     담당자가 검증 화면에서 유형·과정을 확인하고 오류 행을 처리한 뒤에
     `POST /uploads/{draftId}/commit` 을 부르면 그때 카드가 만들어진다.
-    여기서 취소하면 남는 것은 저장된 파일 하나뿐이다.
+    여기서 취소하면 남는 것은 저장된 파일뿐이다.
     """
-    name = (file.filename or "").strip()
-    if not name.lower().endswith((".xlsx", ".xlsm")):
-        raise HTTPException(400, f"xlsx 파일만 지원합니다 — {name or '이름 없음'}")
+    files = [f for f in file if (f.filename or "").strip()]
+    if not files:
+        raise HTTPException(400, "파일이 없습니다")
+    bad = [f.filename for f in files
+           if not (f.filename or "").lower().endswith((".xlsx", ".xlsm"))]
+    if bad:
+        raise HTTPException(400, f"xlsx 파일만 지원합니다 — {', '.join(bad)}")
 
     os.makedirs(STORAGE_DIR, exist_ok=True)
-    path = os.path.join(STORAGE_DIR, os.path.basename(name))
-    with open(path, "wb") as out:            # 원본은 그대로 보관, 이후 읽기만
-        shutil.copyfileobj(file.file, out)
+    known, aliases, roster = _known_courses(db), _aliases(db), _roster(db)
 
-    try:
-        result = analyze(path,
-                         known_courses=_known_courses(db),
-                         aliases=_aliases(db),
-                         roster=_roster(db),
-                         entry_course_key=entryCourseKey)
-    except Exception as exc:                 # noqa: BLE001
-        raise HTTPException(400, f"엑셀을 읽지 못했습니다 — "
-                                 f"{type(exc).__name__}: {exc}")
+    parts, paths = [], []
+    for f in files:
+        path = os.path.join(STORAGE_DIR, os.path.basename(f.filename))
+        with open(path, "wb") as out:        # 원본은 그대로 보관, 이후 읽기만
+            shutil.copyfileobj(f.file, out)
+        paths.append(path)
+        try:
+            parts.append(analyze(path, known_courses=known, aliases=aliases,
+                                 roster=roster, entry_course_key=entryCourseKey))
+        except Exception as exc:             # noqa: BLE001
+            raise HTTPException(400, f"{f.filename} 을(를) 읽지 못했습니다 — "
+                                     f"{type(exc).__name__}: {exc}")
 
-    draft = UploadDraft(filename=name, stored_path=path, analysis=result)
+    result = _merge_analyses(parts)
+    result["files"] = [{"name": os.path.basename(p), "path": p} for p in paths]
+
+    draft = UploadDraft(filename=result["filename"], stored_path=paths[0],
+                        analysis=result)
     db.add(draft)
     db.commit()
     return {"draftId": draft.id, **result}
+
+
+def _merge_analyses(parts: List[dict]) -> dict:
+    """여러 파일의 판정을 한 장으로 합친다.
+
+    유형과 과정은 **첫 파일 것을 따른다.** 같이 올린 파일들은 같은 과정의
+    다른 회차·조라고 보는 것이 자연스럽고, 파일마다 다른 과정을 붙일 수 있게
+    하면 검증 화면이 파일 수만큼 늘어난다. 다르면 담당자가 화면에서 고친다.
+    """
+    if len(parts) == 1:
+        return dict(parts[0])
+
+    head = dict(parts[0])
+    rows, context, sheets, warnings = [], {}, [], []
+    total = {"recognized": 0, "ok": 0, "errors": 0, "warnings": 0}
+    for p in parts:
+        for r in p["rows"]:
+            rows.append({**r, "file": p["filename"]})
+        for k, v in (p.get("context") or {}).items():
+            context.setdefault(k, v)
+        sheets += [f'{p["filename"]} › {s}' for s in (p.get("sheets") or [])]
+        warnings += p.get("warnings") or []
+        for k in total:
+            total[k] += p["summary"][k]
+
+    kinds = {p["sourceType"]["type"] for p in parts}
+    head["sourceType"] = dict(head["sourceType"])
+    if len(kinds) > 1:
+        head["sourceType"]["evidence"] += (
+            f" (함께 올린 파일들의 판정이 갈립니다 — {', '.join(sorted(kinds))}. "
+            f"첫 파일 기준으로 두었으니 확인해 주십시오.)")
+    head.update({
+        "filename": " + ".join(p["filename"] for p in parts),
+        "rows": rows, "context": context, "sheets": sheets,
+        "warnings": warnings, "summary": total,
+    })
+    return head
 
 
 @router.get("/drafts/{draft_id}")
 def get_draft(draft_id: int, db: Session = Depends(get_db)):
     draft = db.get(UploadDraft, draft_id)
     if not draft:
-        raise HTTPException(404, "판정 결과 없음")
+        raise HTTPException(404, _gone(draft_id))
     return {"draftId": draft.id, "status": draft.status,
             "confirmed": draft.confirmed or None, "uploadId": draft.upload_id,
             **(draft.analysis or {})}
+
+
+def _gone(draft_id: int) -> str:
+    """판정 결과가 없을 때의 안내.
+
+    무료 배포는 서버가 다시 뜨면 저장한 것이 전부 사라진다. 그때 담당자가
+    보는 것은 '판정 결과 없음' 다섯 글자뿐이고, 자기가 뭘 잘못했는지 찾게 된다.
+    무슨 일이 일어난 것인지 적어 준다.
+    """
+    return (f"판정 결과 {draft_id} 번을 찾을 수 없습니다. "
+            f"서버가 다시 시작되면 올려 둔 것이 사라집니다(무료 요금제). "
+            f"파일을 다시 올려 주십시오.")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -234,7 +297,7 @@ def commit_draft(draft_id: int, req: CommitRequest,
     """
     draft = db.get(UploadDraft, draft_id)
     if not draft:
-        raise HTTPException(404, "판정 결과 없음")
+        raise HTTPException(404, _gone(draft_id))
     if draft.upload_id:
         raise HTTPException(409, f"이미 카드를 만든 판정입니다 — "
                                  f"업로드 {draft.upload_id}")
@@ -254,24 +317,38 @@ def commit_draft(draft_id: int, req: CommitRequest,
         "operator": req.operator,
     }
 
-    try:
-        result = run_pipeline(draft.stored_path,
-                              roster=_roster(db),
-                              competency_map=_comp_map(db),
-                              auto_approve=False,      # 확정값이 이미 승인이다
-                              confirmed=confirmed)
-    except Exception as exc:                 # noqa: BLE001
-        raise HTTPException(400, f"카드를 만들지 못했습니다 — "
-                                 f"{type(exc).__name__}: {exc}")
+    # 함께 올린 파일을 모두 한 업로드로 넣는다. 회차 간 성장 비교(R-14)는
+    # 카드가 다 모인 뒤에야 붙으므로, 파일마다 따로 만들면 완성되지 않는다.
+    paths = [f["path"] for f in (draft.analysis or {}).get("files", [])
+             if os.path.exists(f["path"])] or [draft.stored_path]
 
     upload = Upload(filename=draft.filename, stored_path=draft.stored_path,
-                    warnings=result["warnings"])
+                    warnings=[])
     db.add(upload)
     db.flush()
-    for card_json in result["cards"]:
-        db.add(_to_row(upload.id, card_json))
-    db.flush()
-    _queue_handoffs(db, upload.id, result["handoffs"])
+
+    all_cards, all_warnings = 0, []
+    for path in paths:
+        try:
+            result = run_pipeline(path,
+                                  roster=_roster(db),
+                                  competency_map=_comp_map(db),
+                                  auto_approve=False,   # 확정값이 이미 승인이다
+                                  confirmed=confirmed)
+        except Exception as exc:             # noqa: BLE001
+            db.rollback()
+            raise HTTPException(400, f"{os.path.basename(path)} 에서 카드를 "
+                                     f"만들지 못했습니다 — "
+                                     f"{type(exc).__name__}: {exc}")
+        for card_json in result["cards"]:
+            db.add(_to_row(upload.id, card_json))
+        all_cards += len(result["cards"])
+        all_warnings += result["warnings"]
+        db.flush()
+        _queue_handoffs(db, upload.id, result["handoffs"])
+
+    upload.warnings = all_warnings
+    result = {"warnings": all_warnings}
 
     draft.upload_id = upload.id
     draft.status = "committed"
@@ -285,11 +362,105 @@ def commit_draft(draft_id: int, req: CommitRequest,
         "cards": _card_briefs(db, upload.id),
         "flags": _flag_list(db, upload.id),
         "warnings": result["warnings"],
+        "files": len(paths),
     }
     if req.generate:
-        out["generation"] = drain(db, upload_id=upload.id)
-        out["reports"] = _build_all(db, upload.id)
-        out["flags"] = _flag_list(db, upload.id)
+        # 문장 생성은 1분 넘게 걸린다. 그 시간 동안 응답을 붙들고 있으면
+        # 느린 서버에서는 중간에 끊기고(502), 그러면 여기까지 만든 것도
+        # 무엇이 됐는지 알 수 없다. 뒤에서 돌리고 진행 상황을 물어보게 한다.
+        jobs.start(upload.id)
+        out["job"] = {"uploadId": upload.id, "state": "running",
+                      "poll": f"/uploads/{upload.id}/status"}
+    else:
+        out["reports"] = []
+    return out
+
+
+# ══════════════════════════════════════════════════════════════
+# 생성 작업 — 응답을 붙들지 않고 뒤에서 돌린다
+# ══════════════════════════════════════════════════════════════
+class _Jobs:
+    """업로드별 생성 진행 상황. 서버가 살아 있는 동안만 기억한다.
+
+    큐를 따로 두지 않는 이유 — 작업의 진실은 이미 DB(handoffs) 에 있다.
+    여기 있는 것은 "지금 돌고 있는가"와 "왜 실패했는가"뿐이다.
+    """
+
+    def __init__(self) -> None:
+        self._state: Dict[int, dict] = {}
+        self._lock = threading.Lock()
+
+    def start(self, upload_id: int) -> None:
+        with self._lock:
+            if (self._state.get(upload_id) or {}).get("state") == "running":
+                return
+            self._state[upload_id] = {"state": "running", "error": None}
+        threading.Thread(target=self._run, args=(upload_id,),
+                         daemon=True, name=f"generate-{upload_id}").start()
+
+    def _run(self, upload_id: int) -> None:
+        db = SessionLocal()
+        try:
+            gen = drain(db, upload_id=upload_id)
+            reports = _build_all(db, upload_id)
+            with self._lock:
+                self._state[upload_id] = {"state": "done", "error": None,
+                                          "generation": gen, "reports": reports}
+        except Exception as exc:                           # noqa: BLE001
+            db.rollback()
+            with self._lock:
+                self._state[upload_id] = {
+                    "state": "error",
+                    "error": f"{type(exc).__name__}: {exc}"}
+        finally:
+            db.close()
+
+    def get(self, upload_id: int) -> dict:
+        with self._lock:
+            return dict(self._state.get(upload_id) or {})
+
+
+jobs = _Jobs()
+
+
+@router.get("/{upload_id}/status")
+def upload_status(upload_id: int, db: Session = Depends(get_db)):
+    """생성이 어디까지 왔는지. 화면이 이걸 몇 초마다 물어본다."""
+    cards = db.query(Card).filter(Card.upload_id == upload_id).all()
+    if not cards:
+        raise HTTPException(404, _gone(upload_id))
+
+    ids = [c.id for c in cards]
+    pending = (db.query(Handoff)
+                 .filter(Handoff.card_id.in_(ids), Handoff.status == "pending")
+                 .count())
+    total = db.query(Handoff).filter(Handoff.card_id.in_(ids)).count()
+
+    job = jobs.get(upload_id)
+    state = job.get("state")
+    if not state:
+        # 서버가 다시 떴거나 이 업로드는 생성을 시킨 적이 없다.
+        state = "done" if pending == 0 else "idle"
+
+    out = {"uploadId": upload_id, "state": state,
+           "done": total - pending, "total": total,
+           "error": job.get("error"),
+           "cards": _card_briefs(db, upload_id),
+           "flags": _flag_list(db, upload_id)}
+    if state == "done":
+        out["reports"] = job.get("reports") or _report_links(db, upload_id)
+        out["generation"] = job.get("generation")
+    return out
+
+
+def _report_links(db: Session, upload_id: int) -> List[dict]:
+    out = []
+    for c in db.query(Card).filter(Card.upload_id == upload_id).all():
+        ok, reason = is_sendable(c.card_json)
+        out.append({"card_id": c.id, "name": c.person_name,
+                    "report_id": c.report.id if c.report else None,
+                    "html": f"/reports/{c.report.id}/html" if c.report else None,
+                    "blocked_by": None if ok else reason})
     return out
 
 
