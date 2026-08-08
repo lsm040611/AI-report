@@ -260,6 +260,71 @@ Object.assign(Component.prototype, {
     }
   },
 
+  // ── ④ 발송 · 추적 ────────────────────────────────────────────────
+  async realTestSend() {
+    try {
+      const st = await API.get('/reports/mail/status');
+      this.showToast(st.ready
+        ? '발송 준비됨 — ' + (st.from || st.host)
+        : '아직 못 보냅니다 — ' + st.note);
+    } catch (err) {
+      this.showToast('메일 설정을 읽지 못했습니다 — ' + err.message);
+    }
+  },
+
+  async realSend() {
+    const s = this.state;
+    if (!s.uploadId) {
+      this.showToast('먼저 파일을 올려 리포트를 만들어 주세요.');
+      return;
+    }
+    this.setState({ sendStage: 'loading' });
+    try {
+      const r = await API.post('/reports/send/upload/' + s.uploadId, null);
+      // 메일 설정이 없으면 서버가 실제로 보내지 않고 미리보기로 돌려준다.
+      // 그걸 '성공'으로 칠하면 안 간 메일을 갔다고 보여 주게 된다.
+      const dry = (r.results || []).some((x) => x.dry_run);
+      const rows = (r.results || []).map((x) => ({
+        name: x.person, empId: x.person, email: x.to || '(주소 없음)',
+        failed: !x.sent, dryRun: !!x.dry_run,
+        reason: x.reason || '',
+      }));
+      this.setState({ sendStage: 'tracking', sendRows: rows, sendDryRun: dry });
+      this.showToast(dry
+        ? '미리보기 — ' + (r.mail && r.mail.note || '') + ' (실제로 보내지 않았습니다)'
+        : r.sent + '/' + r.total + '명에게 보냈습니다');
+    } catch (err) {
+      this.setState({ sendStage: 'before' });
+      this.showToast('발송 실패 — ' + err.message);
+    }
+  },
+
+  // ── ⑤ 인사이트 ──────────────────────────────────────────────────
+  async loadInsight() {
+    const key = this.state.insightCourse;
+    if (!key || this._insightOf === key) return;
+    this._insightOf = key;
+    try {
+      const d = await API.get('/insights/course/' + encodeURIComponent(key));
+      if (this._insightOf !== key) return;
+      this.setState({ engineInsight: d });
+    } catch (err) {
+      this._insightOf = null;
+      this.setState({ engineInsight: null });
+    }
+  },
+
+  async loadCourseList() {
+    if (this._courseListLoaded) return;
+    this._courseListLoaded = true;
+    try {
+      const d = await API.get('/insights/courses');
+      this.setState({ engineCourses: d.courses || [] });
+    } catch (err) {
+      this._courseListLoaded = false;
+    }
+  },
+
   // 검수 화면의 문장 목록은 마크업이 이미 그리고 있다. 데이터만 진짜로 바꾼다.
   async loadEvidenceList(reportId) {
     if (this._evidenceOf === reportId) return;
@@ -280,6 +345,124 @@ Object.assign(Component.prototype, {
   },
 });
 
+// ── 인사이트 판을 실제 숫자로 다시 칠한다 ──────────────────────────────
+// 이 화면의 마크업은 숫자가 대부분 박혀 있다(막대 높이까지). sc-for 로 묶인
+// '항목별 비교' 하나만 데이터로 그린다. 나머지는 제목 글자로 자리를 찾아
+// 그 안쪽만 갈아끼운다 — 카드 껍데기와 디자인은 그대로 두기 위해서다.
+function findCard(title) {
+  const all = document.querySelectorAll('div');
+  for (let i = 0; i < all.length; i++) {
+    const n = all[i];
+    if (n.children.length === 0 && n.textContent.trim() === title) {
+      return n.nextElementSibling;
+    }
+  }
+  return null;
+}
+
+function findMetric(label) {
+  const all = document.querySelectorAll('div');
+  for (let i = 0; i < all.length; i++) {
+    const n = all[i];
+    if (n.children.length === 0 && n.textContent.trim() === label) {
+      return n.nextElementSibling;
+    }
+  }
+  return null;
+}
+
+function bars(host, items) {
+  if (!host || !items.length) return;
+  const top = Math.max.apply(null, items.map((x) => x.value || 0)) || 1;
+  host.innerHTML = items.map((x, i) => {
+    const h = Math.max(8, Math.round((x.value || 0) / top * 72));
+    const last = i === items.length - 1;
+    const fill = last ? 'var(--color-action-red)' : 'var(--color-ink-100)';
+    const weight = last ? 'font-weight:700;' : 'color:var(--muted-fg);';
+    return '<div style="display:flex;flex-direction:column;align-items:center;gap:8px">'
+      + '<div style="width:36px;height:' + h + 'px;background:' + fill
+      + ';border-radius:var(--radius-xs)"></div>'
+      + '<span style="font-size:11px;white-space:nowrap;' + weight + '">'
+      + (x.value === null || x.value === undefined ? '—' : x.value)
+      + ' · ' + x.label + '</span></div>';
+  }).join('');
+}
+
+function rows(host, items) {
+  if (!host) return;
+  host.innerHTML = items.length ? items.map((x) =>
+    '<div style="display:flex;justify-content:space-between">'
+    + '<span style="color:var(--muted-fg);white-space:nowrap">' + x.left + '</span>'
+    + '<span style="white-space:nowrap">' + x.right + '</span></div>').join('')
+    : '<div style="color:var(--muted-fg)">아직 비교할 자료가 없습니다.</div>';
+}
+
+function insightText(host, lines) {
+  if (!host) return;
+  host.innerHTML = lines.length ? lines.map((l) =>
+    '💡 ' + l.text + '<br><span style="opacity:.65">근거: ' + l.basis + '</span>')
+    .join('<br><br>') : '자동 인사이트를 낼 만한 자료가 아직 없습니다.';
+}
+
+Object.assign(Component.prototype, {
+  paintInsight() {
+    const d = this.state.engineInsight;
+    if (!d) return;
+    const stamp = d.courseId + ':' + d.kind;
+    if (this._paintedInsight === stamp) return;
+    this._paintedInsight = stamp;
+
+    const m = findMetric('최근 회차 평균');
+    if (m) {
+      const t = (d.trend || []).filter((x) => x.average !== null);
+      m.textContent = d.kind === '단발특강'
+        ? (d.average === null || d.average === undefined ? '—' : d.average)
+        : (t.length ? t[t.length - 1].average : '—');
+    }
+
+    if (d.kind === '누적교육') {
+      bars(findCard('회차별 평균 추이'),
+        (d.trend || []).map((x) => ({ label: x.round, value: x.average })));
+    } else if (d.kind === '진단서베이') {
+      rows(findCard('관계별 결과'), (d.byRelation || []).map((r) => {
+        const seq = Object.keys(r.byWave).map((w) => r.byWave[w])
+          .filter((v) => v !== null && v !== undefined);
+        const arrow = r.delta === null ? ''
+          : ' <span style="color:var(--status-success)">'
+            + (r.delta > 0 ? '▲' : r.delta < 0 ? '▼' : '―')
+            + Math.abs(r.delta) + '</span>';
+        return { left: r.relation, right: seq.join(' → ') + arrow };
+      }));
+      const waves = d.waves || [];
+      bars(findCard('시행 회차 추이'), waves.map((w) => {
+        const vals = (d.byRelation || []).map((r) => r.byWave[w])
+          .filter((v) => v !== null && v !== undefined);
+        const avg = vals.length
+          ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length * 10) / 10 : null;
+        return { label: w, value: avg };
+      }));
+    } else {
+      bars(findCard('점수 분포'), (d.distribution || []).map((x) => ({
+        label: x.from + '-' + x.to, value: x.count })));
+      const sum = findCard('요약');
+      if (sum) {
+        sum.innerHTML = '평균 ' + (d.average === null ? '—' : d.average)
+          + '점 · 인원 ' + d.people + '명<br>단일 회차 과정 — 회차 추이는 제공되지 않습니다.';
+      }
+    }
+
+    // 자동 인사이트는 어두운 카드 안의 💡 로 시작하는 줄이다
+    const all = document.querySelectorAll('div');
+    for (let i = 0; i < all.length; i++) {
+      const n = all[i];
+      if (n.children.length === 0 && n.textContent.trim().indexOf('💡') === 0) {
+        insightText(n, d.insights || []);
+        break;
+      }
+    }
+  },
+});
+
 // ── 화면이 바뀔 때마다 본문을 맞춰 넣는다 ──────────────────────────────
 const _mounted = Component.prototype.componentDidMount;
 const _updated = Component.prototype.componentDidUpdate;
@@ -293,43 +476,101 @@ Component.prototype.componentDidUpdate = function (a, b) {
   this._syncReport();
 };
 Component.prototype._syncReport = function () {
+  const s = this.state;
   const id = this.currentReportId();
-  if (!id) {
-    this._bodyShown = null;
-    return;
+  if (!id) this._bodyShown = null;
+  if (id && s.view === 'member-report') this.injectReportBody(id);
+  if (id && s.view === 'admin-review') this.loadEvidenceList(id);
+
+  if (s.view === 'admin' && s.subTab === 'insight') {
+    this.loadCourseList();
+    this.loadInsight();
+    this.paintInsight();
+  } else {
+    this._paintedInsight = null;      // 탭을 떠나면 다음에 다시 칠한다
   }
-  if (this.state.view === 'member-report') this.injectReportBody(id);
-  if (this.state.view === 'admin-review') this.loadEvidenceList(id);
 };
 
 // ── 가짜 함수를 진짜로 바꿔 끼운다 ────────────────────────────────────
-// 마크업이 부르는 이름은 그대로 두고 알맹이만 바꾼다.
-const _origRender = Component.prototype.render;
-Component.prototype.render = function () {
-  const props = _origRender.call(this);
+// 마크업이 쓰는 값은 `renderVals()` 가 돌려주는 객체다. 그 위에 덧칠한다.
+// 이름을 잘못 짚으면 아무 일도 안 일어나고 예전 더미가 그대로 보이므로,
+// 원본에서 실제 이름을 확인하고 맞춘 것들이다 (render 가 아니라 renderVals).
+const _origVals = Component.prototype.renderVals;
+if (typeof _origVals !== 'function') {
+  console.error('[엔진 연결] renderVals 를 찾지 못했습니다 — 프로토타입 구조가 바뀌었습니다.');
+}
+Component.prototype.renderVals = function () {
+  const s = this.state;
+  const props = _origVals.call(this);
+
   props.simulateUpload = () => this.realUpload();
   props.generateReport = () => this.realGenerate();
+  props.startSend = () => this.realSend();
+  props.testSend = () => this.realTestSend();
 
-  // 판정 근거는 엔진이 준 문장을 그대로 보여 준다 (통합 명세: 화면에 그대로 노출)
-  if (this.state.engineTypeReason) props.typeReason = this.state.engineTypeReason;
-  if (this.state.engineCourseReason) {
-    props.courseLinkReason = this.state.engineCourseReason;
-    props.courseSuggestTitle = (this.state.engineCourseMode === 'create'
-      ? '제안: 새 과정으로 생성' : '제안: ' + this.state.engineCourseTitle);
+  // 판정 근거는 엔진이 준 문장을 그대로 보여 준다 (통합 명세 §2-①)
+  if (s.engineTypeReason) props.reportTypeReason = s.engineTypeReason;
+  if (s.engineCourseReason) {
+    props.courseLinkSuggestReason = s.engineCourseReason;
+    props.courseLinkSuggestTitle = (s.engineCourseMode === 'create'
+      ? '제안: 새 과정으로 생성' : '제안: ' + (s.engineCourseTitle || ''));
+    props.courseLinkSuggestIsLink = s.engineCourseMode === 'link';
   }
-  if (this.state.engineSummary) {
-    const s = this.state.engineSummary;
-    props.validationSummary = '인식 ' + s.recognized + '행 · 정상 ' + s.ok
-      + ' · 오류 ' + s.errors + ' · 경고 ' + s.warnings;
-  }
-  if (this.state.engineSentences) {
-    props.reviewFeedbackSentences = this.state.engineSentences.map((sent) => ({
+
+  // 검수 화면 — 문장과 근거를 실제 리포트에서 가져온다
+  if (s.engineSentences) {
+    props.reviewFeedbackSentences = s.engineSentences.map((sent) => ({
       ...sent,
-      bg: this.state.reviewSelectedSentenceId === sent.id
+      bg: s.reviewSelectedSentenceId === sent.id
         ? 'var(--surface-pearl)' : 'transparent',
       onSelect: () => this.showEvidence(this.currentReportId(), sent.id),
     }));
-    props.reviewEvidence = this.state.engineEvidence || null;
+    props.reviewEvidence = s.engineEvidence || null;
   }
+
+  // 인사이트 — 과정 목록과 항목별 비교는 프롭으로, 나머지는 paintInsight 가 칠한다
+  if (s.engineCourses) {
+    const uiType = TYPE_TO_ENGINE[s.insightType];
+    props.insightCourseOptions = s.engineCourses
+      .filter((c) => !c.sourceType || c.sourceType === uiType)
+      .map((c) => ({ value: c.courseId, label: c.title }));
+  }
+  if (s.engineInsight && s.engineInsight.kind === '누적교육') {
+    props.accItemComparison = (s.engineInsight.areas || []).map((a) => ({
+      label: a.area, thisRound: a.latest, avg: a.courseAverage,
+    }));
+  } else if (s.engineInsight) {
+    props.accItemComparison = [];
+  }
+
+  // 발송 — 미리보기(실제로 안 보낸 것)를 성공으로 칠하지 않는다
+  if (s.sendRows) {
+    props.recipients = s.sendRows.map((r, i) => ({
+      ...r,
+      statusLabel: r.dryRun ? '미리보기' : (r.failed ? '실패' : '성공'),
+      statusTone: r.dryRun ? 'orange' : (r.failed ? 'red' : 'success'),
+      rowBg: r.failed && !r.dryRun ? 'rgba(234,0,44,0.04)' : 'transparent',
+      trackText: r.reason || (r.failed ? '발송 실패' : '미열람'),
+      onResend: () => this.realSend(),
+    }));
+    props.sendFailCount = s.sendRows.filter((r) => r.failed && !r.dryRun).length;
+    props.sendSuccessCount = s.sendRows.filter((r) => !r.failed).length;
+  }
+  // 과정·유형을 바꾸면 다시 불러오게 표시를 지운다.
+  // 프로토타입이 아니라 props 로 갈아끼우는 이유 — 원래 함수들이 클래스 필드
+  // (인스턴스 속성)라서 프로토타입에 덮어써도 인스턴스 쪽이 이긴다.
+  props.onInsightCourseChange = (e) => {
+    this._insightOf = null;
+    this._paintedInsight = null;
+    this.setState({ insightCourse: e.target.value });
+  };
+  props.setInsightType = (t) => {
+    this._insightOf = null;
+    this._paintedInsight = null;
+    const list = (s.engineCourses || [])
+      .filter((c) => !c.sourceType || c.sourceType === TYPE_TO_ENGINE[t]);
+    this.setState({ insightType: t,
+                    insightCourse: list.length ? list[0].courseId : '' });
+  };
   return props;
 };

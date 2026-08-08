@@ -55,11 +55,47 @@ def main() -> None:
     print(f"  폰트 {dropped['count']}개 뺌 ({dropped['bytes']:,} 바이트) → {len(raw):,}자")
 
     raw = _apply_patch(raw)
+    _verify(raw)
+
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w", encoding="utf-8") as fh:
         fh.write(raw)
     print(f"\n완성 → {os.path.relpath(OUT, ROOT)}  {os.path.getsize(OUT):,} 바이트")
     print("서버를 켜고 /app 으로 들어가시면 됩니다.")
+
+
+def _verify(raw: str) -> None:
+    """패치가 **실행되는 자리**에 들어갔는지 확인한다.
+
+    지난번에는 JSON 문자열 바깥에 떨어졌는데, 파일은 멀쩡히 만들어지고
+    페이지도 열렸다. 아무 일도 안 일어날 뿐이었다. 그래서 여기서 막는다.
+    """
+    m = re.search(r'<script type="__bundler/template">(.*?)</script>', raw, re.S)
+    if not m:
+        print("  ! 템플릿 블록을 찾지 못했습니다."); sys.exit(1)
+    try:
+        page = json.loads(m.group(1))
+    except json.JSONDecodeError as exc:
+        print(f"  ! 패치를 넣고 나서 템플릿 JSON 이 깨졌습니다 — {exc}")
+        sys.exit(1)
+
+    if MARKER not in page:
+        print("  ! 패치가 페이지 안에 없습니다 — 넣은 자리가 틀렸습니다.")
+        sys.exit(1)
+
+    s = re.search(r'<script type="text/x-dc"[^>]*>(.*?)</script>', page, re.S)
+    if not s or MARKER not in s.group(1):
+        print("  ! 패치가 로직 스크립트 밖에 있습니다 — 실행되지 않습니다.")
+        sys.exit(1)
+
+    logic = s.group(1)
+    if logic.count("{") != logic.count("}"):
+        print("  ! 로직 스크립트의 중괄호가 맞지 않습니다.")
+        sys.exit(1)
+    for need in ("renderVals", "realUpload", "realSend", "paintInsight"):
+        if need not in logic:
+            print(f"  ! 패치에 {need} 가 없습니다."); sys.exit(1)
+    print("  검증 — 패치가 로직 스크립트 안에서 실행됩니다")
 
 
 def _find() -> str:
@@ -101,51 +137,62 @@ def _strip_fonts(raw: str):
     return raw, {"count": len(gone), "bytes": saved}
 
 
-def _apply_patch(raw: str) -> str:
-    """로직 스크립트 끝에 패치를 붙인다.
+MARKER = "/* ── 엔진 연결 패치 (tools/build_web.py) ── */"
 
-    번들 안에서 로직은 `<script type="text/x-dc">` 한 덩이다. 그 끝에 붙이면
+# 번들 안에서 로직은 `<script type="text/x-dc">` 한 덩이다. 다만 그 태그가
+# 통째로 JSON 문자열 안에 들어 있어 따옴표와 슬래시가 escape 돼 있다.
+#   여는 태그  <script type=\"text/x-dc\" …>
+#   닫는 태그  <\u002Fscript>
+# 닫는 태그를 평문 `</script>` 로 찾으면 **템플릿 블록 전체의 끝**이 먼저 잡혀서,
+# 패치가 JSON 문자열 바깥에 떨어진다. 그러면 페이지에서 실행되지 않고 조용히
+# 아무 일도 안 일어난다 — 한 번 그렇게 당했다.
+OPEN_ESCAPED = re.compile(r'<script type=\\"text/x-dc\\"[^>]*?>')
+OPEN_PLAIN = re.compile(r'<script type="text/x-dc"[^>]*?>')
+CLOSE_ESCAPED = ("<\\u002Fscript>", "<\\/script>")
+
+
+def _apply_patch(raw: str) -> str:
+    """로직 스크립트 **안쪽 끝**에 패치를 붙인다.
+
     클래스 정의가 끝난 뒤에 실행되므로 프로토타입 메서드를 덮어쓸 수 있다.
     """
-    patch = open(PATCH, encoding="utf-8").read()
-    marker = "/* ── 엔진 연결 패치 (tools/build_web.py) ── */"
-    if marker in raw:
+    if MARKER in raw:
         print("  이미 패치된 파일입니다 — 원본을 다시 받아서 돌리십시오.")
         sys.exit(1)
+    patch = open(PATCH, encoding="utf-8").read()
 
-    m = re.search(r'(<script type=\\"text/x-dc\\"[^>]*>)(.*?)(<\\?/script>|'
-                  r'<\\/script>|</script>)', raw, re.S)
-    if not m:
-        # 템플릿이 통째로 JSON 문자열로 이스케이프돼 있으면 여기로 온다
-        return _apply_patch_escaped(raw, patch, marker)
+    m = OPEN_ESCAPED.search(raw)
+    if m:
+        return _insert_escaped(raw, m.end(), patch)
 
-    end = m.end(2)
-    print("  패치를 로직 끝에 붙였습니다 (평문 구간)")
-    return raw[:end] + "\n" + marker + "\n" + patch + "\n" + raw[end:]
-
-
-def _apply_patch_escaped(raw: str, patch: str, marker: str) -> str:
-    """번들이 로직을 이스케이프된 JSON 문자열로 품고 있는 경우.
-
-    `<script type=\"text/x-dc\" …>` 처럼 따옴표가 escape 된 채 들어 있다.
-    그 자리에 넣으려면 패치도 같은 방식으로 escape 해야 한다.
-    """
-    m = re.search(r'<script type=\\"text/x-dc\\"[^>]*?>', raw)
+    m = OPEN_PLAIN.search(raw)
     if not m:
         print("  로직 스크립트를 찾지 못했습니다 — 번들 형식이 바뀐 듯합니다.")
         sys.exit(1)
-
-    close = raw.find("<\\/script>", m.end())
-    if close < 0:
-        close = raw.find("<\\u002Fscript>", m.end())
+    close = raw.find("</script>", m.end())
     if close < 0:
         print("  로직 스크립트의 끝을 찾지 못했습니다.")
         sys.exit(1)
+    print("  패치를 로직 끝에 붙였습니다 (평문 구간)")
+    return raw[:close] + "\n" + MARKER + "\n" + patch + "\n" + raw[close:]
 
-    blob = json.dumps(marker + "\n" + patch)[1:-1]      # 앞뒤 따옴표만 벗긴다
-    blob = blob.replace("</", "<\\u002F")               # 조기 종료 방지
+
+def _insert_escaped(raw: str, after: int, patch: str) -> str:
+    """JSON 문자열 안에 넣는다 — 패치도 같은 방식으로 escape 해야 한다."""
+    close = -1
+    for tag in CLOSE_ESCAPED:
+        at = raw.find(tag, after)
+        if at >= 0 and (close < 0 or at < close):
+            close = at
+    if close < 0:
+        print("  로직 스크립트의 끝(이스케이프된 닫는 태그)을 찾지 못했습니다.")
+        sys.exit(1)
+
+    blob = json.dumps("\n" + MARKER + "\n" + patch + "\n",
+                      ensure_ascii=False)[1:-1]      # 앞뒤 따옴표만 벗긴다
+    blob = blob.replace("</", "<\\u002F")            # 스크립트 조기 종료 방지
     print("  패치를 로직 끝에 붙였습니다 (이스케이프 구간)")
-    return raw[:close] + "\\n" + blob + "\\n" + raw[close:]
+    return raw[:close] + blob + raw[close:]
 
 
 if __name__ == "__main__":
