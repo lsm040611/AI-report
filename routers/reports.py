@@ -110,12 +110,17 @@ def report_html(report_id: int, db: Session = Depends(get_db)):
 # UI 통합 지점 ③ — 카드 → 리포트 본문 렌더
 # ══════════════════════════════════════════════════════════════
 @router.get("/{report_id}/body")
-def report_body(report_id: int, db: Session = Depends(get_db)):
+def report_body(report_id: int, scope: Optional[str] = None,
+                db: Session = Depends(get_db)):
     """리포트 **본문만** 조각으로 준다. UI 의 placeholder 자리에 그대로 넣는다.
 
     통짜 HTML(`/html`)과 다른 점은 셋이다 — `<html>` 껍데기가 없고, 사이드바가
     이미 보여 주는 이름·과정 머리글이 빠지고, 스타일시트를 따로 준다.
     묶음마다 `data-section` 이 붙어 있어 스크롤 스파이가 바로 동작한다.
+
+    `?scope=.hr-body` 를 붙이면 CSS 의 모든 규칙을 그 선택자 안에 가둬서 준다.
+    남의 페이지에 끼워 넣을 때 필요하다 — 우리 CSS 에는 `section`·`h2` 같은
+    넓은 선택자가 있어 그대로 얹으면 바깥까지 같이 바뀐다.
     """
     report = db.get(Report, report_id)
     if not report:
@@ -128,7 +133,8 @@ def report_body(report_id: int, db: Session = Depends(get_db)):
         "maxWidth": 760,                       # 통합 명세가 정한 본문 폭
         "toc": template.toc(sections),         # 실제로 렌더된 묶음만
         "html": template.render_sections(sections),
-        "css": template.CSS,
+        "css": template.scoped_css(scope) if scope else template.CSS,
+        "scope": scope or None,
         "footerHtml": template.render_footer(pres.get("footer")),
         "sentenceCount": len(pres.get("evidence") or []),
     }

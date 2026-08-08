@@ -774,6 +774,73 @@ def toc(sections) -> List[dict]:
             if any(RENDERERS[s["kind"]](s) for s in buckets[g])]
 
 
+# ══════════════════════════════════════════════════════════════
+# 5. 스타일 가두기 — 남의 페이지 안에 본문을 넣을 때
+# ══════════════════════════════════════════════════════════════
+def scoped_css(prefix: str) -> str:
+    """모든 규칙 앞에 `prefix` 를 붙여, 이 스타일이 바깥으로 새지 않게 한다.
+
+    본문을 UI 페이지 안에 끼워 넣을 때 필요하다. 우리 CSS 에는 `section`,
+    `h2`, `*` 같은 넓은 선택자가 있어서, 그대로 얹으면 UI 의 다른 곳까지
+    같이 바뀐다. 실제로 한 번 얹어 보고 알았다 — 사이드바 글자가 리포트
+    서체로 변했다.
+
+    `:root` 는 변수를 담고 있으니 prefix 자체로 바꾼다. 변수는 상속되므로
+    안쪽 요소는 그대로 값을 읽는다.
+    """
+    return _prefix_block(CSS, prefix.strip())
+
+
+def _prefix_block(css: str, prefix: str) -> str:
+    out, i, n = [], 0, len(css)
+    while i < n:
+        brace = css.find("{", i)
+        if brace < 0:
+            out.append(css[i:])
+            break
+        head = css[i:brace]
+        end = _match_brace(css, brace)
+        body = css[brace + 1:end]
+
+        sel = head.strip()
+        lead = head[:len(head) - len(head.lstrip())]
+        if sel.startswith("@media") or sel.startswith("@supports"):
+            out.append(f"{lead}{sel}{{{_prefix_block(body, prefix)}}}")
+        elif sel.startswith("@"):
+            out.append(f"{lead}{sel}{{{body}}}")          # @font-face 등은 그대로
+        else:
+            out.append(f"{lead}{_prefix_selector(sel, prefix)}{{{body}}}")
+        i = end + 1
+    return "".join(out)
+
+
+def _match_brace(css: str, open_at: int) -> int:
+    depth = 0
+    for j in range(open_at, len(css)):
+        if css[j] == "{":
+            depth += 1
+        elif css[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return j
+    return len(css) - 1
+
+
+def _prefix_selector(sel: str, prefix: str) -> str:
+    parts = []
+    for one in sel.split(","):
+        s = one.strip()
+        if not s:
+            continue
+        if s in (":root", "html", "body"):
+            parts.append(prefix)                          # 변수는 상속으로 내려간다
+        elif s.startswith(prefix):
+            parts.append(s)                               # 이미 가둬져 있다
+        else:
+            parts.append(f"{prefix} {s}")
+    return ",".join(parts)
+
+
 def render_masthead(card: dict) -> str:
     m = card.get("meta") or {}
     p = card.get("person") or {}

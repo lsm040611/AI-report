@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import os
 import traceback
 
 from fastapi import FastAPI, Request
@@ -225,7 +226,22 @@ async function sendMail(b){
 """
 
 
+WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "index.html")
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
-    """업로드 화면. 프론트 없이도 전 구간을 눌러 볼 수 있게 한 장짜리로 둔다."""
+    """첫 화면. UI 프로토타입이 빌드돼 있으면 그것을, 없으면 한 장짜리를 준다.
+
+    프로토타입은 `tools/build_web.py` 가 만든다. 없어도 서버는 온전히 돌아야
+    한다 — 프론트가 없다고 엔진을 못 쓰게 되면 곤란하다.
+    """
+    if os.path.exists(WEB):
+        return HTMLResponse(open(WEB, encoding="utf-8").read())
+    return HTMLResponse(INDEX.replace("__MODE__", mode_banner()))
+
+
+@app.get("/simple", response_class=HTMLResponse)
+def simple():
+    """한 장짜리 업로드 화면. 프론트가 말썽일 때 여기로 우회한다."""
     return HTMLResponse(INDEX.replace("__MODE__", mode_banner()))
