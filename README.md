@@ -101,10 +101,28 @@ uvicorn main:app --port 8000
 | `http://127.0.0.1:8000/` | **업로드 화면.** 파일을 올리면 리포트 링크까지 나옵니다 |
 | `/dashboard` | **HRD 대시보드** — 과정 단위 지표 |
 | `/docs` | 프론트 팀과 공유할 API 계약서 (자동 생성) |
+| `/contract` | UI 가 쓰는 고정 어휘 — issueCode·severity·섹션 id |
 | `/rules` | 구현된 규칙 19개 — 계약 규칙표와 대조용 |
 | `/health` | 현재 모드 확인 |
 
 PDF가 필요하면 리포트를 브라우저로 열고 `Ctrl+P → 대상: PDF로 저장`.
+
+### 인터넷에 올리기
+
+팀원이 링크만 열면 쓸 수 있게 하려면 → **[docs/배포하기_Render.md](docs/배포하기_Render.md)**
+(무료, 20~30분, 카드 없이 됩니다)
+
+인사 평가를 다루는 서버라 **비밀번호(`HR_AUTH_PASS`)를 넣지 않으면 바깥에서는
+아예 열리지 않습니다.** 내 컴퓨터에서 쓸 때는 지금까지와 똑같습니다.
+
+### UI 트랙과 붙이기
+
+프론트 프로토타입과의 경계는 → **[docs/엔진_핸드오프_v1.md](docs/엔진_핸드오프_v1.md)**
+
+```bash
+python tools/make_handoff.py   # 카드 샘플·API·본문 산출물 만들기
+python test_ui_contract.py     # 통합 지점 5개 회귀 시험
+```
 
 ---
 

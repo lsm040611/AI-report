@@ -4,3 +4,8 @@ sqlalchemy>=2.0
 openpyxl>=3.1
 python-multipart>=0.0.9
 anthropic>=0.40
+
+# 외부 DB(PostgreSQL)를 붙일 때만 쓰인다. SQLite 로 돌 때는 건드리지 않는다.
+# 미리 넣어 두는 이유 — 배포한 뒤에 DB 를 붙이면 그 순간 서버가 죽고,
+# 원인이 "드라이버 없음"이라는 걸 알아내는 데 시간이 걸린다.
+psycopg[binary]>=3.1

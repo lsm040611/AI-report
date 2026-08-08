@@ -12,6 +12,7 @@ import traceback
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+import auth
 from config import AUTO_APPROVE, MODEL, USE_LLM, mode_banner
 from database import Base, engine
 from routers import cards, dashboard, handoff, insights, reports, uploads
@@ -24,6 +25,9 @@ app = FastAPI(
     description=("데이터 계약 v0.5 구현. 규칙 ID와 코드가 1:1로 대응합니다.\n\n"
                  f"현재 모드 — {mode_banner()}"),
 )
+
+# 인터넷에 올렸을 때의 첫 관문. 라우터보다 먼저 건다.
+auth.install(app)
 
 app.include_router(uploads.router)
 app.include_router(cards.router)
@@ -73,8 +77,13 @@ def rules():
 
 @app.get("/health")
 def health():
+    """로그인 없이 열리는 유일한 길 — 호스팅이 서버 생사를 확인하는 데 쓴다.
+
+    그래서 여기에는 자료를 담지 않는다. 켜져 있는가, 어떤 모드인가까지만.
+    """
     return {"status": "ok", "auto_approve": AUTO_APPROVE,
-            "generation": MODEL if USE_LLM else "mock"}
+            "generation": MODEL if USE_LLM else "mock",
+            "auth": "on" if auth.enabled() else "local-only"}
 
 
 # --------------------------------------------------------------------------
