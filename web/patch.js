@@ -41,8 +41,21 @@ const TYPE_FROM_ENGINE = {
 // 무슨 일이 있었는지 브라우저 콘솔에서 볼 수 있게 남긴다.
 // 화면만 보고는 "왜 안 되지"를 알 수 없어서, 개발자도구에 HR_DEBUG 를 쳐 보면
 // 마지막 판정 결과·마지막 오류가 그대로 나오게 해 둔다.
-const HR_DEBUG = { analyze: null, commit: null, lastError: null, calls: [] };
+const HR_DEBUG = { analyze: null, commit: null, lastError: null, calls: [],
+                   build: null };
 window.HR_DEBUG = HR_DEBUG;
+
+// 지금 브라우저가 들고 있는 화면이 서버의 최신판인지 스스로 확인한다.
+// 고쳐서 올렸는데 예전 화면이 캐시로 남아 있으면, 같은 오류를 몇 번이고
+// 다시 보고하게 된다 — 그 시간을 없앤다.
+fetch('/health', { credentials: 'same-origin' })
+  .then((r) => r.json())
+  .then((h) => {
+    HR_DEBUG.build = h.web;
+    console.log('[엔진] 화면 판 ' + h.web + ' · 생성 ' + h.generation
+      + ' · 로그인 ' + h.auth);
+  })
+  .catch(() => {});
 
 function note(kind, detail) {
   HR_DEBUG.calls.push({ kind, detail, at: new Date().toISOString() });

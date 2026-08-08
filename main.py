@@ -88,7 +88,9 @@ def health():
     """
     return {"status": "ok", "auto_approve": AUTO_APPROVE,
             "generation": MODEL if USE_LLM else "mock",
-            "auth": "on" if auth.enabled() else "local-only"}
+            "auth": "on" if auth.enabled() else "local-only",
+            # 화면 지문. 브라우저에서 본 것과 다르면 예전 판을 보고 있는 것이다.
+            "web": web_build()}
 
 
 # --------------------------------------------------------------------------
@@ -232,6 +234,19 @@ async function sendMail(b){
 
 WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "index.html")
 
+# 브라우저가 화면을 붙들고 있으면 고쳐서 올려도 예전 것이 계속 보인다.
+# 그 상태로는 "고쳤는데 왜 그대로냐"를 몇 번이고 되풀이하게 된다.
+NO_CACHE = {"Cache-Control": "no-store, must-revalidate", "Pragma": "no-cache"}
+
+
+def web_build() -> str:
+    """지금 서버가 들고 있는 화면의 지문. 어느 판이 떠 있는지 확인용."""
+    if not os.path.exists(WEB):
+        return "none"
+    import hashlib
+    with open(WEB, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()[:8]
+
 
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -241,8 +256,8 @@ def index():
     한다 — 프론트가 없다고 엔진을 못 쓰게 되면 곤란하다.
     """
     if os.path.exists(WEB):
-        return HTMLResponse(open(WEB, encoding="utf-8").read())
-    return HTMLResponse(INDEX.replace("__MODE__", mode_banner()))
+        return HTMLResponse(open(WEB, encoding="utf-8").read(), headers=NO_CACHE)
+    return HTMLResponse(INDEX.replace("__MODE__", mode_banner()), headers=NO_CACHE)
 
 
 @app.get("/simple", response_class=HTMLResponse)
