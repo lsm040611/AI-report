@@ -639,8 +639,24 @@ Component.prototype.componentDidMount = function () {
     mainMembers: [], validationRows: [], excludedList: [],
     requests: [], monthlyReports: [], adhocCourses: [], memberExtraCourses: [],
     auditMemberData: { name: '없음', empId: '—', status: 'unreviewed',
-                       sendIncluded: false, decided: true, selected: false },
+                       sendIncluded: false, decided: true, selected: true },
+    selectedIdx: 0,
     insightCourse: '',
+  });
+
+  // 명단이 비었을 때 눌리면 안 되는 것들. 화면에서는 버튼이 꺼져 있지만
+  // 키보드 단축키(Enter=승인)는 그 상태를 보지 않고 그냥 부른다.
+  // 이 함수들은 클래스 필드라 프로토타입에 덮어써도 인스턴스가 이긴다 —
+  // 그래서 인스턴스 자리에 직접 끼운다.
+  ['approveSelected', 'resolveHoldApprove', 'resolveHoldExclude',
+   'toggleEdit', 'ackWarning'].forEach((name) => {
+    const original = this[name];
+    if (typeof original !== 'function') return;
+    this[name] = (...args) => {
+      const list = this.state.mainMembers || [];
+      if (!list[this.state.selectedIdx]) return;      // 고른 사람이 없다
+      return original.apply(this, args);
+    };
   });
 
   this._installHistory();
@@ -694,6 +710,16 @@ Component.prototype.renderVals = function () {
   });
   if (s.auditMemberData && typeof s.auditMemberData.empId !== 'string') {
     s.auditMemberData.empId = String(s.auditMemberData.empId || '');
+  }
+
+  // 원본은 `mainMembers[selectedIdx]` 를 방어 없이 쓴다 (`selM.warningAcked`).
+  // 예시 인물을 걷어내 명단이 비거나, 골라 둔 자리가 목록 밖으로 밀리면
+  // undefined 를 읽고 화면이 하얘진다. 부르기 전에 자리를 맞춰 둔다.
+  const n = (s.mainMembers || []).length;
+  if (s.selectedIdx >= n) s.selectedIdx = Math.max(0, n - 1);
+  if (n === 0 && s.auditMemberData) {
+    // 아무도 없으면 청강 칸이 선택된 것으로 둔다. 그 갈래는 selM 을 안 본다.
+    s.auditMemberData.selected = true;
   }
 
   const props = _origVals.call(this);
