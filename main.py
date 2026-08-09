@@ -81,6 +81,18 @@ def rules():
     } for r in sorted(REGISTRY.values(), key=lambda x: x.rule_id)]
 
 
+@app.get("/mailcheck")
+def mailcheck():
+    """메일 서버까지 실제로 닿는지. **보내지는 않는다.**
+
+    /health 옆에 로그인 없이 둔다 — 설정이 들어갔는지, 포트가 열려 있는지
+    확인하려고 매번 로그인해서 들어가야 하면 고치는 데 시간만 든다.
+    비밀번호는 담지 않는다.
+    """
+    import mailer
+    return mailer.check()
+
+
 @app.get("/health")
 def health():
     """로그인 없이 열리는 유일한 길 — 호스팅이 서버 생사를 확인하는 데 쓴다.

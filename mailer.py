@@ -173,6 +173,62 @@ def build_message(cfg: MailConfig, to: str, subject: str, body: str,
     return msg
 
 
+def check(cfg: Optional[MailConfig] = None) -> dict:
+    """**보내지 않고** 접속·로그인만 해 본다.
+
+    발송이 실패할 때 이유가 여럿이다 — 앱 비밀번호가 틀렸는가, 서버가 메일
+    포트를 막았는가, 계정이 잠겼는가. 실제로 메일을 쏘아 보며 알아내면
+    되돌릴 수 없는 메일이 나가고, 실패해도 왜인지는 그대로 모른다.
+    여기서는 문 앞까지만 가 보고 돌아온다.
+    """
+    cfg = cfg or config()
+    if not cfg.ready:
+        return {"ok": False, "step": "설정", "reason": cfg.why_not(),
+                "hint": "값을 채우고 다시 확인하십시오"}
+
+    step = "연결"
+    try:
+        if cfg.use_ssl:
+            smtp = smtplib.SMTP_SSL(cfg.host, cfg.port, timeout=20,
+                                    context=ssl.create_default_context())
+        else:
+            smtp = smtplib.SMTP(cfg.host, cfg.port, timeout=20)
+        with smtp:
+            step = "보안 연결(STARTTLS)"
+            if not cfg.use_ssl:
+                smtp.starttls(context=ssl.create_default_context())
+            step = "로그인"
+            smtp.login(cfg.user, cfg.password)
+        return {"ok": True, "step": "완료",
+                "reason": f"{cfg.host}:{cfg.port} 에 {cfg.user} 로 로그인됐습니다"}
+    except Exception as exc:                    # noqa: BLE001
+        name = type(exc).__name__
+        return {"ok": False, "step": step,
+                "reason": f"{name}: {exc}",
+                "hint": _hint(name, str(exc), cfg)}
+
+
+def _hint(name: str, msg: str, cfg: MailConfig) -> str:
+    """무엇을 고쳐야 하는지. 오류 이름만으로는 알 수 없다."""
+    low = msg.lower()
+    if "authentication" in name.lower() or "5.7.8" in msg or "not accepted" in low:
+        return ("앱 비밀번호가 맞지 않습니다. 구글 계정 > 보안 > 2단계 인증을 "
+                "켠 뒤 '앱 비밀번호'를 새로 발급해 HR_SMTP_PASS 에 넣으십시오. "
+                "구글 로그인 비밀번호로는 SMTP 가 막힙니다.")
+    if name in ("TimeoutError", "socket.timeout") or "timed out" in low:
+        return (f"{cfg.host}:{cfg.port} 로 나가는 길이 막혀 있습니다. "
+                f"무료 호스팅은 메일 포트를 막아 두는 경우가 많습니다 — "
+                f"포트 465(SSL)로 바꿔 보시고, 그래도 안 되면 호스팅이 "
+                f"SMTP 를 허용하는지 확인해야 합니다.")
+    if name in ("ConnectionRefusedError", "SMTPConnectError", "OSError",
+                "gaierror", "SMTPServerDisconnected"):
+        return (f"{cfg.host}:{cfg.port} 에 닿지 못했습니다. 주소·포트를 "
+                f"확인하시고, 호스팅이 바깥 메일 연결을 막는지 보십시오.")
+    if "SMTPSenderRefused" in name:
+        return "보내는 주소가 거부됐습니다. HR_SMTP_USER 가 실제 계정인지 확인하십시오."
+    return "위 메시지를 그대로 알려 주시면 원인을 짚겠습니다."
+
+
 def send(to: str, subject: str, body: str,
          attachment: Optional[tuple] = None,
          cfg: Optional[MailConfig] = None) -> dict:

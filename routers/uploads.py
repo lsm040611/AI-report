@@ -370,8 +370,13 @@ def commit_draft(draft_id: int, req: CommitRequest,
         # 문장 생성은 1분 넘게 걸린다. 그 시간 동안 응답을 붙들고 있으면
         # 느린 서버에서는 중간에 끊기고(502), 그러면 여기까지 만든 것도
         # 무엇이 됐는지 알 수 없다. 뒤에서 돌리고 진행 상황을 물어보게 한다.
-        jobs.start(upload.id)
+        queued = (db.query(Handoff)
+                    .filter(Handoff.card_id.in_([c["cardId"] for c in out["cards"]]),
+                            Handoff.status == "pending")
+                    .count())
+        jobs.start(upload.id, total=queued)
         out["job"] = {"uploadId": upload.id, "state": "running",
+                      "total": queued,
                       "poll": f"/uploads/{upload.id}/status"}
     else:
         out["reports"] = []
@@ -392,12 +397,14 @@ class _Jobs:
         self._state: Dict[int, dict] = {}
         self._lock = threading.Lock()
 
-    def start(self, upload_id: int) -> None:
+    def start(self, upload_id: int, total: int = 0) -> None:
+        """총 건수를 시작할 때부터 담는다 — 0/0 으로 시작하면 막대가 움직일
+        자리가 없고, 화면은 '몇 개 중 몇 개'인지 말하지 못한다."""
         with self._lock:
             if (self._state.get(upload_id) or {}).get("state") == "running":
                 return
             self._state[upload_id] = {"state": "running", "error": None,
-                                      "done": 0, "total": 0,
+                                      "done": 0, "total": total,
                                       "startedAt": time.monotonic()}
         threading.Thread(target=self._run, args=(upload_id,),
                          daemon=True, name=f"generate-{upload_id}").start()

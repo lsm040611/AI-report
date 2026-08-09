@@ -317,6 +317,16 @@ def my_reports(empId: Optional[str] = None, name: Optional[str] = None,
             "total": sum(len(g["rounds"]) for g in groups.values())}
 
 
+@router.get("/mail/check")
+def mail_check():
+    """접속·로그인만 해 본다. 메일은 보내지 않는다.
+
+    발송이 실패할 때 실제로 쏘아 보며 원인을 찾으면, 되돌릴 수 없는 메일이
+    나가고 그러고도 이유는 모른다. 문 앞까지만 가 본다.
+    """
+    return mailer.check()
+
+
 @router.get("/mail/status")
 def mail_status():
     """발송 준비가 됐는지. 화면이 버튼 옆에 이 상태를 띄운다."""
@@ -407,11 +417,17 @@ class _SendJobs:
         self._state: Dict[int, dict] = {}
         self._lock = threading.Lock()
 
-    def start(self, upload_id: int) -> None:
+    def start(self, upload_id: int, total: int = 0) -> None:
+        """총 몇 통인지 **시작할 때부터** 알려 준다.
+
+        0/0 으로 시작하면 화면이 '몇 개 중 몇 개'인지 말하지 못하고, 막대도
+        움직일 자리가 없다. 보낼 사람 수는 시작 전에 이미 아는 값이다.
+        """
         with self._lock:
             if (self._state.get(upload_id) or {}).get("state") == "running":
                 return
-            self._state[upload_id] = {"state": "running", "done": 0, "total": 0,
+            self._state[upload_id] = {"state": "running", "done": 0,
+                                      "total": total,
                                       "startedAt": time.monotonic(), "error": None}
         threading.Thread(target=self._run, args=(upload_id,),
                          daemon=True, name=f"send-{upload_id}").start()
@@ -458,12 +474,13 @@ def send_upload(upload_id: int, wait: bool = False,
 
     `wait=1` 이면 다 보낼 때까지 기다렸다 결과를 준다 (스크립트·시험용).
     """
-    if not db.query(Card).filter(Card.upload_id == upload_id).first():
+    n = db.query(Card).filter(Card.upload_id == upload_id).count()
+    if not n:
         raise HTTPException(404, "업로드 없음")
     if wait:
         return _send_all(db, upload_id)
-    send_jobs.start(upload_id)
-    return {"upload_id": upload_id, "state": "running",
+    send_jobs.start(upload_id, total=n)
+    return {"upload_id": upload_id, "state": "running", "total": n,
             "poll": f"/reports/send/status/{upload_id}",
             "mail": mailer.status()}
 

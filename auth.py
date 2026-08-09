@@ -19,8 +19,11 @@ import os
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, PlainTextResponse
 
-# 로그인 없이 통과시키는 길. 렌더가 서버 생사를 확인할 때 쓴다.
-OPEN_PATHS = ("/health",)
+# 로그인 없이 통과시키는 길.
+#   /health     호스팅이 서버 생사를 확인한다
+#   /mailcheck  메일 설정이 들어갔는지·포트가 열렸는지 확인한다
+# 둘 다 **자료를 담지 않는다.** 켜져 있는가, 닿는가까지만 말한다.
+OPEN_PATHS = ("/health", "/mailcheck")
 
 # 내 컴퓨터에서 온 요청으로 보는 주소
 LOCAL_HOSTS = ("127.0.0.1", "::1", "localhost", "testclient")
