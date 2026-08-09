@@ -27,6 +27,7 @@ from email.message import EmailMessage
 from email.utils import formataddr
 from typing import Optional
 
+import gmail_api
 import localenv
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
@@ -49,7 +50,13 @@ class MailConfig:
 
     @property
     def ready(self) -> bool:
-        """실제 발송에 필요한 것이 다 있는가."""
+        """실제 발송에 필요한 것이 다 있는가.
+
+        지메일 HTTPS 길이 열려 있으면 SMTP 계정은 없어도 된다. 보내는 주소는
+        구글 계정이 정하므로, 우리가 알아야 할 것은 '보낼 수 있는가' 뿐이다.
+        """
+        if self.enabled and gmail_api.configured():
+            return True
         return bool(self.enabled and self.host and self.user and self.password)
 
     def why_not(self) -> str:
@@ -61,6 +68,8 @@ class MailConfig:
         where = _where()
         if not self.enabled:
             return f"{where} 의 HR_MAIL_ENABLED 가 꺼져 있습니다"
+        if gmail_api.configured():
+            return ""
         missing = [n for n, v in (("HR_SMTP_HOST", self.host),
                                   ("HR_SMTP_USER", self.user),
                                   ("HR_SMTP_PASS", self.password)) if not v]
@@ -182,6 +191,11 @@ def check(cfg: Optional[MailConfig] = None) -> dict:
     여기서는 문 앞까지만 가 보고 돌아온다.
     """
     cfg = cfg or config()
+    if not cfg.enabled:
+        return {"ok": False, "step": "설정", "reason": cfg.why_not(),
+                "hint": "값을 채우고 다시 확인하십시오"}
+    if gmail_api.configured():
+        return gmail_api.check()
     if not cfg.ready:
         return {"ok": False, "step": "설정", "reason": cfg.why_not(),
                 "hint": "값을 채우고 다시 확인하십시오"}
@@ -248,6 +262,18 @@ def send(to: str, subject: str, body: str,
                 "attachment": attached, "bytes": size}
 
     msg = build_message(cfg, to, subject, body, attachment)
+
+    # 지메일 HTTPS 길이 열려 있으면 그쪽으로 간다. 호스팅이 SMTP 를 막아도
+    # 이 길은 막히지 않는다. 메일 내용은 위에서 이미 다 만들었으므로
+    # 운반 수단만 갈아탄다 — 두 군데서 조립하면 내용이 달라진다.
+    if gmail_api.configured():
+        ok, info = gmail_api.send_raw(msg.as_bytes())
+        if ok:
+            return {"to": to, "sent": True, "subject": subject,
+                    "via": "gmail-api"}
+        return {"to": to, "sent": False, "via": "gmail-api",
+                "reason": f"Gmail API — {info}"}
+
     try:
         if cfg.use_ssl:
             with smtplib.SMTP_SSL(cfg.host, cfg.port,
@@ -268,7 +294,9 @@ def send(to: str, subject: str, body: str,
 
 def status() -> dict:
     cfg = config()
-    return {"enabled": cfg.enabled, "ready": cfg.ready,
-            "host": cfg.host, "port": cfg.port,
+    via = "gmail-api" if gmail_api.configured() else "smtp"
+    return {"enabled": cfg.enabled, "ready": cfg.ready, "via": via,
+            "host": "gmail.googleapis.com (HTTPS)" if via == "gmail-api" else cfg.host,
+            "port": 443 if via == "gmail-api" else cfg.port,
             "from": cfg.sender or None,
             "note": cfg.why_not() or "발송 준비됨"}
