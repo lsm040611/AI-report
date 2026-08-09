@@ -101,7 +101,10 @@ def mailcheck(port: int = 0, host: str = ""):
                                   host=host or cfg.host,
                                   use_ssl=(port == 465) if port else cfg.use_ssl)
     out = mailer.check(cfg)
-    out["tried"] = f"{cfg.host}:{cfg.port}"
+    # HTTPS 로 나가는데 SMTP 주소를 같이 찍으면, 무엇으로 보내는지 헷갈린다.
+    out["tried"] = ("gmail.googleapis.com:443 (HTTPS)"
+                    if out.get("transport") == "gmail-api"
+                    else f"{cfg.host}:{cfg.port}")
     return out
 
 
