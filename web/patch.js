@@ -587,9 +587,10 @@ Object.assign(Component.prototype, {
           hasComparison: rounds.length > 1,
           comparisonLabel: rounds.length > 1
             ? `성장 비교 (${rounds[rounds.length - 2].round} → ${last.round})` : '',
-          // 이 문구가 들어가는 칸은 높이가 46px 로 박혀 있다. 길면 넘쳐서
-          // 잘린 것처럼 보인다 — 짧게 적는다.
-          noticeText: rounds.length > 1 ? null : '다음 회차부터 비교됩니다',
+          // 칸이 글자에 맞춰 늘어나게 해 두었으므로(unclipNotices) 줄이지 않는다.
+          // 무슨 뜻인지 온전히 적는 편이 낫다.
+          noticeText: rounds.length > 1 ? null
+            : '다음 회차부터 성장 비교가 시작됩니다',
         });
       });
 
