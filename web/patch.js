@@ -305,14 +305,15 @@ Object.assign(Component.prototype, {
         this.showToast('진행 상황을 못 읽었습니다 — ' + err.message);
         return;
       }
-      if (st.total) {
-        this.showToast('문장 ' + st.done + '/' + st.total + '건 생성 중…');
+      if (st.state === 'running') {
+        this.paintProgress(st);
       }
       if (st.state === 'running' && Date.now() - started < 10 * 60 * 1000) {
-        setTimeout(tick, 3000);
+        setTimeout(tick, 2000);
         return;
       }
       this._watching = null;
+      this.paintProgress(null);
 
       if (st.state === 'error') {
         this.showToast('문장 생성 실패 — ' + st.error);
@@ -332,10 +333,45 @@ Object.assign(Component.prototype, {
                       mainMembers: split.regular, auditMemberData: split.audit });
       note('리포트 준비', { 카드별: byCard, 사람별: byPerson });
       const made = Object.keys(byCard).length;
-      this.showToast(made ? '리포트 ' + made + '편 준비됐습니다'
-                          : '리포트가 만들어지지 않았습니다 — 플래그를 확인하십시오');
+      const took = st.etaText || '';
+      this.showToast(made
+        ? '리포트 ' + made + '편 준비됐습니다' + (took ? ' · ' + took : '')
+        : '리포트가 만들어지지 않았습니다 — 플래그를 확인하십시오');
     };
-    setTimeout(tick, 1500);
+    setTimeout(tick, 1200);
+  },
+
+  // 진행 막대. 토스트는 2.4초 뒤 사라져서, 1분 넘는 일에는 맞지 않는다.
+  // 끝날 때까지 한자리에 남아 있는 것이 필요하다.
+  paintProgress(st) {
+    let bar = document.getElementById('hr-progress');
+    if (!st) {
+      if (bar) bar.remove();
+      return;
+    }
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'hr-progress';
+      bar.setAttribute('style', [
+        'position:fixed', 'left:50%', 'transform:translateX(-50%)',
+        'bottom:22px', 'z-index:9500', 'min-width:280px',
+        'padding:12px 18px', 'border-radius:12px',
+        'background:rgba(35,29,24,.94)', 'color:#fff',
+        'font-size:13px', 'line-height:1.5',
+        'box-shadow:0 6px 22px rgba(0,0,0,.22)',
+      ].join(';'));
+      document.body.appendChild(bar);
+    }
+    const done = st.done || 0, total = st.total || 0;
+    const pct = total ? Math.round(done / total * 100) : 0;
+    const eta = st.etaText ? ' · ' + st.etaText : '';
+    bar.innerHTML =
+      '<div style="display:flex;justify-content:space-between;gap:16px">'
+      + '<span>문장 만드는 중 ' + done + '/' + total + '</span>'
+      + '<span style="opacity:.7">' + pct + '%' + eta + '</span></div>'
+      + '<div style="height:5px;border-radius:3px;background:rgba(255,255,255,.18);'
+      + 'margin-top:8px;overflow:hidden"><div style="height:100%;width:' + pct
+      + '%;background:#DA1B33;transition:width .4s ease"></div></div>';
   },
 
   // ── ③ 리포트 본문 · 근거 ──────────────────────────────────────────

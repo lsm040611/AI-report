@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
@@ -23,7 +24,14 @@ from . import worker
 
 
 def drain(db: Session, upload_id: Optional[int] = None,
-          operator: str = "자동 모드", auto_accept: bool = True) -> Dict[str, object]:
+          operator: str = "자동 모드", auto_accept: bool = True,
+          on_progress=None) -> Dict[str, object]:
+    """생성 큐를 비운다.
+
+    `on_progress(done, total)` 를 주면 **호출이 하나 끝날 때마다** 부른다.
+    DB 상태만 보고 세면 한 묶음이 통째로 끝나기 전까지 0 에서 멈춰 있는데,
+    그 묶음이 1분 가까이 걸린다 — 화면에는 아무 일도 안 일어나는 것처럼 보인다.
+    """
     q = db.query(Handoff).filter(Handoff.status == "pending")
     if upload_id is not None:
         card_ids = [c.id for c in db.query(Card).filter(Card.upload_id == upload_id).all()]
@@ -40,7 +48,8 @@ def drain(db: Session, upload_id: Optional[int] = None,
     rest = [h for h in pending if h.rule_id not in PRIORITY_RULES]
     retagged: set = set()
 
-    _run_wave(db, first, operator, auto_accept, retagged, stats)
+    tally = _Tally(len(pending), on_progress)
+    _run_wave(db, first, operator, auto_accept, retagged, stats, tally)
 
     # 강조 판정이 바뀐 카드는, 뒤따르는 작업의 재료를 새로 뽑아 준다
     for h in rest:
@@ -49,11 +58,31 @@ def drain(db: Session, upload_id: Optional[int] = None,
             if card is not None:
                 _refresh_payload(h, card)
 
-    _run_wave(db, rest, operator, auto_accept, retagged, stats)
+    _run_wave(db, rest, operator, auto_accept, retagged, stats, tally)
 
     db.commit()
     stats["engine"] = worker.engine_name()
     return stats
+
+
+class _Tally:
+    """끝난 호출을 센다. 여러 스레드가 동시에 올리므로 자물쇠를 건다."""
+
+    def __init__(self, total: int, on_progress=None):
+        self.total = total
+        self.done = 0
+        self._on = on_progress
+        self._lock = threading.Lock()
+
+    def tick(self) -> None:
+        with self._lock:
+            self.done += 1
+            done = self.done
+        if self._on:
+            try:
+                self._on(done, self.total)
+            except Exception:                  # noqa: BLE001
+                pass                           # 진행 표시가 본작업을 막으면 안 된다
 
 
 # 한 번에 몇 건까지 같이 부를지. 호출은 대부분 응답을 기다리는 시간이라 겹쳐도 되지만,
@@ -62,7 +91,8 @@ CONCURRENCY = max(1, int(os.getenv("HR_CONCURRENCY", "4")))
 
 
 def _run_wave(db: Session, handoffs: List[Handoff], operator: str,
-              auto_accept: bool, retagged: set, stats: Dict[str, object]) -> None:
+              auto_accept: bool, retagged: set, stats: Dict[str, object],
+              tally: Optional["_Tally"] = None) -> None:
     """한 묶음을 겹쳐서 부르고, 저장은 한 건씩 순서대로 한다.
 
     부르는 일만 나눠 맡긴다. DB 세션은 이 스레드 것이라 다른 스레드가 만지면 안 되고,
@@ -76,13 +106,19 @@ def _run_wave(db: Session, handoffs: List[Handoff], operator: str,
     if not jobs:
         return
 
+    def one(j):
+        out = worker.generate(*j[2:])
+        if tally:
+            tally.tick()                   # 끝나는 대로 센다 — 묶음을 기다리지 않는다
+        return out
+
     if len(jobs) == 1:
-        results = [worker.generate(*jobs[0][2:])]
+        results = [one(jobs[0])]
     else:
         worker.warm()                      # 스레드가 저마다 클라이언트를 만들지 않도록
         with ThreadPoolExecutor(max_workers=min(CONCURRENCY, len(jobs))) as pool:
             # generate 는 예외를 밖으로 던지지 않는다 — 실패해도 목 결과가 돌아온다
-            results = list(pool.map(lambda j: worker.generate(*j[2:]), jobs))
+            results = list(pool.map(one, jobs))
 
     for (h, card, *_), result in zip(jobs, results):
         _accept_or_reject(db, h, card, result, operator, auto_accept, retagged, stats)

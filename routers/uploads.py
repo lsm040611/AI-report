@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import threading
+import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -394,18 +395,30 @@ class _Jobs:
         with self._lock:
             if (self._state.get(upload_id) or {}).get("state") == "running":
                 return
-            self._state[upload_id] = {"state": "running", "error": None}
+            self._state[upload_id] = {"state": "running", "error": None,
+                                      "done": 0, "total": 0,
+                                      "startedAt": time.monotonic()}
         threading.Thread(target=self._run, args=(upload_id,),
                          daemon=True, name=f"generate-{upload_id}").start()
+
+    def _progress(self, upload_id: int, done: int, total: int) -> None:
+        with self._lock:
+            slot = self._state.get(upload_id)
+            if slot is not None:
+                slot["done"], slot["total"] = done, total
 
     def _run(self, upload_id: int) -> None:
         db = SessionLocal()
         try:
-            gen = drain(db, upload_id=upload_id)
+            gen = drain(db, upload_id=upload_id,
+                        on_progress=lambda d, t: self._progress(upload_id, d, t))
             reports = _build_all(db, upload_id)
             with self._lock:
-                self._state[upload_id] = {"state": "done", "error": None,
-                                          "generation": gen, "reports": reports}
+                started = (self._state.get(upload_id) or {}).get("startedAt")
+                self._state[upload_id] = {
+                    "state": "done", "error": None,
+                    "generation": gen, "reports": reports,
+                    "elapsed": round(time.monotonic() - started, 1) if started else None}
         except Exception as exc:                           # noqa: BLE001
             db.rollback()
             with self._lock:
@@ -442,15 +455,53 @@ def upload_status(upload_id: int, db: Session = Depends(get_db)):
         # 서버가 다시 떴거나 이 업로드는 생성을 시킨 적이 없다.
         state = "done" if pending == 0 else "idle"
 
+    # 진행은 돌고 있는 작업이 세는 값을 먼저 믿는다. DB 상태만 보면 한 묶음이
+    # 통째로 끝나기 전까지 0 에서 멈춰 있어, 아무 일도 안 하는 것처럼 보인다.
+    done = job.get("done") if job.get("state") == "running" else total - pending
+    if not job.get("total") and state == "running":
+        done = total - pending
+
     out = {"uploadId": upload_id, "state": state,
-           "done": total - pending, "total": total,
+           "done": done or 0, "total": job.get("total") or total,
            "error": job.get("error"),
            "cards": _card_briefs(db, upload_id),
            "flags": _flag_list(db, upload_id)}
+    out.update(_eta(job, out["done"], out["total"]))
     if state == "done":
         out["reports"] = job.get("reports") or _report_links(db, upload_id)
         out["generation"] = job.get("generation")
     return out
+
+
+def _eta(job: dict, done: int, total: int) -> dict:
+    """지금까지 걸린 시간으로 남은 시간을 어림한다.
+
+    호출 한 건이 대체로 비슷하게 걸리므로, 평균에 남은 건수를 곱하면 된다.
+    한 건도 안 끝났으면 아직 알 수 없다고 말한다 — 아무 숫자나 보여 주는 것보다
+    "곧 시작합니다"가 정직하다.
+    """
+    started = job.get("startedAt")
+    if job.get("state") == "done":
+        el = job.get("elapsed")
+        return {"elapsedSec": el, "etaSec": 0,
+                "etaText": f"{_mmss(el)} 걸렸습니다" if el else "완료"}
+    if not started:
+        return {"elapsedSec": None, "etaSec": None, "etaText": None}
+
+    elapsed = round(time.monotonic() - started, 1)
+    if not done or not total:
+        return {"elapsedSec": elapsed, "etaSec": None,
+                "etaText": "곧 시작합니다"}
+    per = elapsed / done
+    left = max(0, total - done)
+    eta = round(per * left)
+    return {"elapsedSec": elapsed, "etaSec": eta,
+            "etaText": f"약 {_mmss(eta)} 남음" if left else "마무리 중"}
+
+
+def _mmss(sec) -> str:
+    s = int(round(sec or 0))
+    return f"{s}초" if s < 60 else f"{s // 60}분 {s % 60}초"
 
 
 def _report_links(db: Session, upload_id: int) -> List[dict]:
