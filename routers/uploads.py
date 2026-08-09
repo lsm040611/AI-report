@@ -660,16 +660,28 @@ def _first(d: dict, keys) -> Optional[str]:
 
 
 def _queue_handoffs(db: Session, upload_id: int, handoffs) -> None:
-    """이름으로 카드를 찾아 큐에 붙인다.
+    """생성 작업을 제 카드에 붙인다.
 
-    동명이인이 같은 업로드에 있으면 첫 카드로 몰린다. R-15 가 person_id 를
-    붙이기 전까지는 이름이 유일한 키라서 생기는 한계다(플래그로 표시된다).
+    **이름만으로 가리면 안 된다.** 1차수와 2차수를 함께 올리면 같은 사람의
+    카드가 둘이고, 이름을 열쇠로 쓰면 전부 첫 카드로 몰린다. 그러면 2차수
+    카드는 문장이 하나도 없는 리포트가 되어, 겉보기에 '리포트가 하나만
+    만들어진' 것처럼 보인다.
+
+    그래서 좁은 열쇠부터 차례로 맞춰 본다 — (이름·파일·행) → (이름·파일)
+    → (이름). 마지막 것은 예전과 같은 한계이고, 그때는 동명이인 플래그가
+    이미 붙어 있다.
     """
-    cards = {}
+    exact, by_file, by_name = {}, {}, {}
     for c in db.query(Card).filter(Card.upload_id == upload_id).all():
-        cards.setdefault(c.person_name, c.id)
+        exact.setdefault((c.person_name, c.source_file, c.source_row), c.id)
+        by_file.setdefault((c.person_name, c.source_file), c.id)
+        by_name.setdefault(c.person_name, c.id)
+
     for h in handoffs:
-        cid = cards.get(h.get("person"))
+        name = h.get("person")
+        cid = (exact.get((name, h.get("source_file"), h.get("source_row")))
+               or by_file.get((name, h.get("source_file")))
+               or by_name.get(name))
         if cid:
             db.add(Handoff(card_id=cid, rule_id=h["rule_id"],
                            task=h["task"], payload=h["payload"]))

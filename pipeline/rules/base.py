@@ -114,9 +114,20 @@ def mark_applied(card: dict, rule_id: str, note: str = "") -> None:
 
 def request_handoff(ctx: RuleContext, card: dict, rule_id: str,
                     task: str, payload: dict) -> None:
-    """생성이 필요한 작업을 큐에 올린다. 파이썬은 여기서 손을 뗀다."""
+    """생성이 필요한 작업을 큐에 올린다. 파이썬은 여기서 손을 뗀다.
+
+    어느 카드의 것인지 **이름만으로 가리지 않는다.** 1차수와 2차수를 함께
+    올리면 같은 사람의 카드가 둘이 되는데, 이름만 붙여 보내면 큐를 붙일 때
+    한쪽 카드로 다 몰린다. 그러면 나머지 카드는 문장이 하나도 없는 리포트가
+    된다 — 겉보기에 '리포트가 안 만들어진' 것과 같다.
+    """
+    prov = card.get("provenance") or {}
+    row = prov.get("row") or prov.get("rows")
     ctx.handoffs.append({
         "person": (card.get("person") or {}).get("name"),
+        "source_file": prov.get("file"),
+        "source_sheet": prov.get("sheet"),
+        "source_row": str(row) if row is not None else None,
         "rule_id": rule_id,
         "task": task,
         "payload": payload,
