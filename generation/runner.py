@@ -85,9 +85,10 @@ class _Tally:
                 pass                           # 진행 표시가 본작업을 막으면 안 된다
 
 
-# 한 번에 몇 건까지 같이 부를지. 호출은 대부분 응답을 기다리는 시간이라 겹쳐도 되지만,
-# 너무 많이 겹치면 사용량 한도(429)에 걸린다. 넉넉잡아 4 건.
-CONCURRENCY = max(1, int(os.getenv("HR_CONCURRENCY", "4")))
+# 한 번에 몇 건까지 같이 부를지. 호출은 대부분 답을 기다리는 시간이라 겹쳐도 된다.
+# 4 에서 8 로 올린다 — 22건이면 6묶음에서 3묶음으로 줄어 절반 가까이 빨라진다.
+# 한도(429)에 걸려도 이제 재시도가 받아 주므로, 그때 잃는 것은 몇 초뿐이다.
+CONCURRENCY = max(1, int(os.getenv("HR_CONCURRENCY", "8")))
 
 
 def _run_wave(db: Session, handoffs: List[Handoff], operator: str,

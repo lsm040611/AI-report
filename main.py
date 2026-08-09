@@ -217,7 +217,7 @@ async function sendMail(b){
   const msg=document.getElementById('sendmsg');
   b.disabled=true; msg.textContent=' 보내는 중…';
   try{
-    const r=await fetch('/reports/send/upload/'+b.dataset.u,{method:'POST'});
+    const r=await fetch('/reports/send/upload/'+b.dataset.u+'?wait=1',{method:'POST'});
     const d=await r.json();
     if(!r.ok){ msg.textContent=' '+(d.detail||'실패'); return; }
     const dry=(d.results||[]).some(x=>x.dry_run);

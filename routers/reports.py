@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import threading
+import time
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote
 
@@ -20,6 +22,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 import mailer
+import progress
 from database import get_db
 from models import Card, Course, Report
 from pipeline.rules.base import (RuleContext, is_reportable,
@@ -366,30 +369,118 @@ def send_report(report_id: int, db: Session = Depends(get_db)):
     return {"report_id": report.id, "person": person.get("name"), **result}
 
 
-@router.post("/send/upload/{upload_id}")
-def send_upload(upload_id: int, db: Session = Depends(get_db)):
+def _send_all(db: Session, upload_id: int, on_progress=None) -> dict:
     """한 파일에서 나온 리포트를 사람마다 자기 주소로 보낸다."""
     cards = db.query(Card).filter(Card.upload_id == upload_id).all()
     if not cards:
         raise HTTPException(404, "업로드 없음")
 
     results = []
-    for card in cards:
+    for i, card in enumerate(cards, start=1):
         report = db.query(Report).filter(Report.card_id == card.id).one_or_none()
         person = (card.card_json.get("person") or {})
         if report is None:
             results.append({"person": person.get("name"), "sent": False,
                             "reason": "리포트가 아직 없습니다"})
-            continue
-        try:
-            results.append(send_report(report.id, db))
-        except HTTPException as exc:
-            results.append({"person": person.get("name"), "sent": False,
-                            "reason": exc.detail})
+        else:
+            try:
+                results.append(send_report(report.id, db))
+            except HTTPException as exc:
+                results.append({"person": person.get("name"), "sent": False,
+                                "reason": exc.detail})
+        if on_progress:
+            on_progress(i, len(cards))
 
     sent = sum(1 for r in results if r.get("sent"))
     return {"upload_id": upload_id, "sent": sent,
             "total": len(results), "mail": mailer.status(), "results": results}
+
+
+class _SendJobs:
+    """발송 진행 상황. 한 사람에 1~3초씩 걸려, 열 명이면 서른 초다.
+
+    그 시간 동안 응답을 붙들고 있으면 느린 서버에서 끊기고(502), 그러면 누구까지
+    갔는지 알 수 없게 된다. 메일은 되돌릴 수 없으니 그게 특히 나쁘다.
+    """
+
+    def __init__(self) -> None:
+        self._state: Dict[int, dict] = {}
+        self._lock = threading.Lock()
+
+    def start(self, upload_id: int) -> None:
+        with self._lock:
+            if (self._state.get(upload_id) or {}).get("state") == "running":
+                return
+            self._state[upload_id] = {"state": "running", "done": 0, "total": 0,
+                                      "startedAt": time.monotonic(), "error": None}
+        threading.Thread(target=self._run, args=(upload_id,),
+                         daemon=True, name=f"send-{upload_id}").start()
+
+    def _tick(self, upload_id: int, done: int, total: int) -> None:
+        with self._lock:
+            slot = self._state.get(upload_id)
+            if slot is not None:
+                slot["done"], slot["total"] = done, total
+
+    def _run(self, upload_id: int) -> None:
+        from database import SessionLocal
+        db = SessionLocal()
+        try:
+            out = _send_all(db, upload_id,
+                            lambda d, t: self._tick(upload_id, d, t))
+            with self._lock:
+                started = (self._state.get(upload_id) or {}).get("startedAt")
+                self._state[upload_id] = {
+                    "state": "done", "error": None, "result": out,
+                    "done": out["total"], "total": out["total"],
+                    "elapsed": round(time.monotonic() - started, 1) if started else None}
+        except Exception as exc:                           # noqa: BLE001
+            db.rollback()
+            with self._lock:
+                self._state[upload_id] = {
+                    "state": "error", "done": 0, "total": 0,
+                    "error": f"{type(exc).__name__}: {getattr(exc, 'detail', exc)}"}
+        finally:
+            db.close()
+
+    def get(self, upload_id: int) -> dict:
+        with self._lock:
+            return dict(self._state.get(upload_id) or {})
+
+
+send_jobs = _SendJobs()
+
+
+@router.post("/send/upload/{upload_id}")
+def send_upload(upload_id: int, wait: bool = False,
+                db: Session = Depends(get_db)):
+    """발송을 시작한다. 기본은 뒤에서 돌리고 진행을 물어보게 한다.
+
+    `wait=1` 이면 다 보낼 때까지 기다렸다 결과를 준다 (스크립트·시험용).
+    """
+    if not db.query(Card).filter(Card.upload_id == upload_id).first():
+        raise HTTPException(404, "업로드 없음")
+    if wait:
+        return _send_all(db, upload_id)
+    send_jobs.start(upload_id)
+    return {"upload_id": upload_id, "state": "running",
+            "poll": f"/reports/send/status/{upload_id}",
+            "mail": mailer.status()}
+
+
+@router.get("/send/status/{upload_id}")
+def send_status(upload_id: int):
+    """발송이 어디까지 갔는지. 화면이 몇 초마다 물어본다."""
+    job = send_jobs.get(upload_id)
+    if not job:
+        raise HTTPException(404, "발송을 시작한 적이 없습니다")
+    out = {"uploadId": upload_id, "state": job.get("state"),
+           "done": job.get("done") or 0, "total": job.get("total") or 0,
+           "error": job.get("error")}
+    out.update(progress.eta(job, out["done"], out["total"], "만에 보냈습니다"))
+    if job.get("state") == "done":
+        out.update(job["result"])
+    return out
 
 
 @router.post("/{report_id:int}/review")

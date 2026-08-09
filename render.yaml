@@ -54,7 +54,7 @@ services:
       - key: HR_EFFORT
         value: medium
       - key: HR_CONCURRENCY
-        value: "4"
+        value: "8"
 
     # 자료를 어디에 둘지는 여기서 정하지 않는다. config.py 가 /var/data 가
     # 붙어 있는지 직접 보고 고른다 — 무료면 현재 폴더, 디스크를 붙이면 디스크.

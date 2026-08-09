@@ -22,6 +22,7 @@ from pipeline import courses as coursematch
 from pipeline import run_pipeline
 from pipeline.analyze import analyze
 from pipeline.rules.base import is_reportable, is_sendable, max_severity
+import progress
 from contract import SOURCE_TYPES
 from routers.reports import build_report
 
@@ -466,42 +467,12 @@ def upload_status(upload_id: int, db: Session = Depends(get_db)):
            "error": job.get("error"),
            "cards": _card_briefs(db, upload_id),
            "flags": _flag_list(db, upload_id)}
-    out.update(_eta(job, out["done"], out["total"]))
+    out.update(progress.eta(job, out["done"], out["total"]))
     if state == "done":
         out["reports"] = job.get("reports") or _report_links(db, upload_id)
         out["generation"] = job.get("generation")
     return out
 
-
-def _eta(job: dict, done: int, total: int) -> dict:
-    """지금까지 걸린 시간으로 남은 시간을 어림한다.
-
-    호출 한 건이 대체로 비슷하게 걸리므로, 평균에 남은 건수를 곱하면 된다.
-    한 건도 안 끝났으면 아직 알 수 없다고 말한다 — 아무 숫자나 보여 주는 것보다
-    "곧 시작합니다"가 정직하다.
-    """
-    started = job.get("startedAt")
-    if job.get("state") == "done":
-        el = job.get("elapsed")
-        return {"elapsedSec": el, "etaSec": 0,
-                "etaText": f"{_mmss(el)} 걸렸습니다" if el else "완료"}
-    if not started:
-        return {"elapsedSec": None, "etaSec": None, "etaText": None}
-
-    elapsed = round(time.monotonic() - started, 1)
-    if not done or not total:
-        return {"elapsedSec": elapsed, "etaSec": None,
-                "etaText": "곧 시작합니다"}
-    per = elapsed / done
-    left = max(0, total - done)
-    eta = round(per * left)
-    return {"elapsedSec": elapsed, "etaSec": eta,
-            "etaText": f"약 {_mmss(eta)} 남음" if left else "마무리 중"}
-
-
-def _mmss(sec) -> str:
-    s = int(round(sec or 0))
-    return f"{s}초" if s < 60 else f"{s // 60}분 {s % 60}초"
 
 
 def _report_links(db: Session, upload_id: int) -> List[dict]:

@@ -367,7 +367,7 @@ Object.assign(Component.prototype, {
     const eta = st.etaText ? ' · ' + st.etaText : '';
     bar.innerHTML =
       '<div style="display:flex;justify-content:space-between;gap:16px">'
-      + '<span>문장 만드는 중 ' + done + '/' + total + '</span>'
+      + '<span>' + (st.label || '문장 만드는 중') + ' ' + done + '/' + total + '</span>'
       + '<span style="opacity:.7">' + pct + '%' + eta + '</span></div>'
       + '<div style="height:5px;border-radius:3px;background:rgba(255,255,255,.18);'
       + 'margin-top:8px;overflow:hidden"><div style="height:100%;width:' + pct
@@ -471,23 +471,61 @@ Object.assign(Component.prototype, {
     }
     this.setState({ sendStage: 'loading' });
     try {
-      const r = await API.post('/reports/send/upload/' + s.uploadId, null);
-      // 메일 설정이 없으면 서버가 실제로 보내지 않고 미리보기로 돌려준다.
-      // 그걸 '성공'으로 칠하면 안 간 메일을 갔다고 보여 주게 된다.
-      const dry = (r.results || []).some((x) => x.dry_run);
-      const rows = (r.results || []).map((x) => ({
-        name: x.person, empId: x.person, email: x.to || '(주소 없음)',
-        failed: !x.sent, dryRun: !!x.dry_run,
-        reason: x.reason || '',
-      }));
-      this.setState({ sendStage: 'tracking', sendRows: rows, sendDryRun: dry });
-      this.showToast(dry
-        ? '미리보기 — ' + (r.mail && r.mail.note || '') + ' (실제로 보내지 않았습니다)'
-        : r.sent + '/' + r.total + '명에게 보냈습니다');
+      await API.post('/reports/send/upload/' + s.uploadId, null);
+      this.watchSending(s.uploadId);
     } catch (err) {
       this.setState({ sendStage: 'before' });
       this.showToast('발송 실패 — ' + err.message);
     }
+  },
+
+  // 한 사람에 1~3초씩 걸린다. 열 명이면 서른 초 — 그동안 아무 말이 없으면
+  // 멈춘 줄 알고 다시 누르게 되고, 메일은 그러면 두 번 간다.
+  async watchSending(uploadId) {
+    if (this._sending === uploadId) return;
+    this._sending = uploadId;
+    const started = Date.now();
+
+    const tick = async () => {
+      if (this._sending !== uploadId) return;
+      let st;
+      try {
+        st = await API.get('/reports/send/status/' + uploadId);
+      } catch (err) {
+        this._sending = null;
+        this.paintProgress(null);
+        this.showToast('발송 상황을 못 읽었습니다 — ' + err.message);
+        return;
+      }
+      if (st.state === 'running') {
+        this.paintProgress({ ...st, label: '메일 보내는 중' });
+        if (Date.now() - started < 10 * 60 * 1000) {
+          setTimeout(tick, 1500);
+          return;
+        }
+      }
+      this._sending = null;
+      this.paintProgress(null);
+
+      if (st.state === 'error') {
+        this.setState({ sendStage: 'before' });
+        this.showToast('발송 실패 — ' + st.error);
+        return;
+      }
+      // 메일 설정이 없으면 서버가 실제로 보내지 않고 미리보기로 돌려준다.
+      // 그걸 '성공'으로 칠하면 안 간 메일을 갔다고 보여 주게 된다.
+      const dry = (st.results || []).some((x) => x.dry_run);
+      const rows = (st.results || []).map((x) => ({
+        name: x.person, empId: x.person, email: x.to || '(주소 없음)',
+        failed: !x.sent, dryRun: !!x.dry_run, reason: x.reason || '',
+      }));
+      this.setState({ sendStage: 'tracking', sendRows: rows, sendDryRun: dry });
+      this.showToast(dry
+        ? '미리보기 — ' + (st.mail && st.mail.note || '') + ' (실제로 보내지 않았습니다)'
+        : st.sent + '/' + st.total + '명에게 보냈습니다'
+          + (st.etaText ? ' · ' + st.etaText : ''));
+    };
+    setTimeout(tick, 800);
   },
 
   // ── 구성원 화면 — 로그인한 사번의 리포트를 불러온다 ─────────────────
