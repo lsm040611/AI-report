@@ -53,14 +53,26 @@ class MailConfig:
         return bool(self.enabled and self.host and self.user and self.password)
 
     def why_not(self) -> str:
+        """왜 못 보내는지. **어디를 고쳐야 하는지까지** 적는다.
+
+        내 컴퓨터에서 돌 때와 서버에 올렸을 때 고칠 자리가 다르다. 서버에는
+        mail.env 가 없는데 "mail.env 를 고치라"고 하면 없는 파일을 찾게 된다.
+        """
+        where = _where()
         if not self.enabled:
-            return "mail.env 의 HR_MAIL_ENABLED 가 꺼져 있습니다"
+            return f"{where} 의 HR_MAIL_ENABLED 가 꺼져 있습니다"
         missing = [n for n, v in (("HR_SMTP_HOST", self.host),
                                   ("HR_SMTP_USER", self.user),
                                   ("HR_SMTP_PASS", self.password)) if not v]
         if missing:
-            return f"mail.env 에 {', '.join(missing)} 값을 채워 주십시오"
+            return f"{where} 에 {', '.join(missing)} 값을 채워 주십시오"
         return ""
+
+
+def _where() -> str:
+    """설정을 고칠 자리. 배포된 서버에는 mail.env 가 없다."""
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mail.env")
+    return "mail.env" if os.path.exists(here) else "서버 환경변수(Environment)"
 
 
 def config() -> MailConfig:

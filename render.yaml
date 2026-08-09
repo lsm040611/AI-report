@@ -31,17 +31,20 @@ services:
       - key: ANTHROPIC_API_KEY          # 없으면 목(mock) 문장으로 돈다
         sync: false
 
-      # ── 메일 발송을 쓸 때만 ────────────────────────────────────────
+      # ── 메일 발송 ──────────────────────────────────────────────────
+      # 켜 두되, 아래 네 칸을 채우기 전에는 실제로 보내지 않는다.
+      # 그때는 '미리보기' 로만 돌고 화면에도 그렇게 표시된다 —
+      # 안 간 메일을 갔다고 보여 주는 것보다 낫다.
       - key: HR_MAIL_ENABLED
-        value: "0"
+        value: "1"
       - key: HR_SMTP_HOST
-        sync: false
+        value: smtp.gmail.com
       - key: HR_SMTP_PORT
-        sync: false
+        value: "587"
       - key: HR_SMTP_USER
-        sync: false
+        sync: false           # 보내는 계정 (예: ggdltmdals@gmail.com)
       - key: HR_SMTP_PASS
-        sync: false
+        sync: false           # 구글 앱 비밀번호 16자리
 
       # ── 동작 설정 ────────────────────────────────────────────────
       - key: HR_AUTH_USER
