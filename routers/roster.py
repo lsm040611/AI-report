@@ -161,6 +161,23 @@ def seed_if_empty() -> Optional[dict]:
         db.close()
 
 
+@router.post("/reset")
+def reset_to_seed(db: Session = Depends(get_db)):
+    """명부를 저장소에 든 기본 파일로 되돌린다.
+
+    자동 적재는 **채우기만** 한다 — 사람이 고쳐 둔 값을 재시작이 덮으면
+    안 되기 때문이다. 그 대신 명부에서 사람을 **뺀** 경우에는 배포한
+    서버에 옛 행이 그대로 남는다. 지우는 것은 조용히 일어나면 안 되므로
+    여기서 사람이 눌러서 한다.
+    """
+    if not os.path.exists(SEED_CSV):
+        raise HTTPException(404, "저장소에 기본 명부가 없습니다")
+    with open(SEED_CSV, "rb") as fh:
+        got = load_csv(db, fh.read(), replace=True)
+    print(f"[명부] 기본 명부로 되돌렸습니다 — {got['total']}명")
+    return got
+
+
 @router.get("")
 def find(employee_id: Optional[str] = None, name: Optional[str] = None,
          alias: Optional[str] = None, all: bool = False,
@@ -199,41 +216,89 @@ def summary(db: Session = Depends(get_db)):
 
 
 SETUP_PAGE = """<!doctype html><html lang=ko><head><meta charset=utf-8>
-<title>사원 명부 넣기</title><style>
-body{font-family:'Malgun Gothic',sans-serif;background:#F0E8D6;color:#231D18;
-     margin:0;padding:40px 16px;line-height:1.7}
-.s{max-width:640px;margin:0 auto;background:#fff;border:1px solid #E2D7C0;
-   border-top:6px solid #DA1B33;border-radius:3px;padding:32px 36px}
-h1{font-size:24px;margin:0 0 4px}
-p.m{color:#6E655C;font-size:13.5px;margin:0 0 22px}
-.drop{border:2px dashed #E2D7C0;background:#FBF5E4;border-radius:6px;
-      padding:24px;text-align:center}
-button{font:inherit;font-weight:700;background:#DA1B33;color:#fff;border:0;
-       border-radius:20px;padding:9px 22px;cursor:pointer;margin-top:12px}
-table{border-collapse:collapse;width:100%;font-size:13px;margin-top:18px}
-td,th{border-bottom:1px solid #EFE8D9;padding:7px 4px;text-align:left}
-.warn{color:#A00E22}.ok{color:#0B6151;font-weight:700}
-pre{background:#FBF5E4;border:1px solid #E2D7C0;padding:12px;font-size:12px;
-    white-space:pre-wrap;border-radius:4px}
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>사원 명부 넣기</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/wanteddev/wanted-sans@v1.0.3/packages/wanted-sans/fonts/webfonts/variable/complete/WantedSansVariable.min.css">
+<style>
+:root{--red:#EA002C;--ink:#1B1B1D;--ink2:#48484D;--muted:#78787E;
+      --line:#E4E4E7;--line2:#F0F0F2;--pearl:#FAFAFC;--page:#F5F5F7}
+*{box-sizing:border-box}
+body{font-family:'Wanted Sans','Noto Sans KR','Malgun Gothic',sans-serif;
+     background:var(--page);color:var(--ink);margin:0;padding:40px 16px 80px;
+     line-height:1.65;-webkit-font-smoothing:antialiased}
+.s{max-width:660px;margin:0 auto;background:#fff;border:1px solid var(--line);
+   border-radius:14px;padding:34px 38px;
+   box-shadow:0 1px 3px rgba(0,0,0,.04),0 8px 28px rgba(0,0,0,.05)}
+.eyebrow{display:inline-block;font-size:11.5px;font-weight:700;letter-spacing:.06em;
+   color:var(--red);background:#FDE9ED;padding:4px 12px;border-radius:999px;
+   margin-bottom:12px}
+h1{font-size:24px;font-weight:700;letter-spacing:-.02em;margin:0 0 6px}
+p.m{color:var(--muted);font-size:13.5px;margin:0 0 22px}
+.drop{border:1.5px dashed var(--line);background:var(--pearl);border-radius:11px;
+      padding:26px;text-align:center}
+input[type=file]{font:inherit;font-size:13px}
+button{font:inherit;font-weight:600;background:var(--red);color:#fff;border:0;
+       border-radius:999px;padding:9px 22px;cursor:pointer;margin-top:12px}
+button.ghost{background:#fff;color:var(--ink2);border:1px solid var(--line)}
+button:disabled{opacity:.5;cursor:progress}
+h2{font-size:14px;font-weight:700;margin:28px 0 6px;padding-top:20px;
+   border-top:1px solid var(--line2)}
+table{border-collapse:separate;border-spacing:0;width:100%;font-size:13px;
+      margin-top:16px;border:1px solid var(--line);border-radius:11px;
+      overflow:hidden}
+th{font-size:11.5px;color:var(--muted);font-weight:600;background:var(--pearl);
+   text-align:left;padding:9px 12px;border-bottom:1px solid var(--line)}
+td{padding:10px 12px;border-bottom:1px solid var(--line2)}
+tr:last-child td{border-bottom:0}
+.warn{color:#A80020;font-weight:600}
+.ok{color:#14663D;font-weight:700}
+pre{background:var(--pearl);border:1px solid var(--line);padding:12px;
+    font-size:12px;white-space:pre-wrap;border-radius:9px}
+.foot{font-size:12.5px;color:var(--muted);margin-top:28px;padding-top:18px;
+      border-top:1px solid var(--line2)}
+.foot a{color:var(--red);font-weight:600;text-decoration:none;margin-right:14px}
 </style></head><body><div class=s>
+<div class=eyebrow>HR 리포트 엔진</div>
 <h1>사원 명부 넣기</h1>
-<p class=m>평가지에는 이름만 있습니다. 사번과 이메일은 이 명부에서 옵니다.<br>
-넣기 전에는 리포트를 만들 수는 있어도 <b>본인에게 보낼 수 없습니다.</b></p>
+<p class=m>평가지에는 이름만 있습니다. 사번·직급·이메일은 이 명부에서 옵니다.<br>
+명부에서 못 찾은 사람은 리포트가 <b>보류</b>로 서고 발송도 막힙니다.</p>
 <form id=f class=drop>
   <div>employees.csv 를 고르세요</div>
   <input type=file name=file accept=".csv" required>
   <br><button type=submit>넣기</button>
 </form>
+
+<h2>명부에서 사람을 뺐는데 서버에 그대로라면</h2>
+<p class=m style="margin-bottom:10px">서버가 다시 뜰 때는 <b>모자란 사람만 채웁니다</b> —
+고쳐 둔 값을 덮지 않기 위해서입니다. 그래서 <b>뺀 사람은 안 지워집니다.</b>
+아래 단추는 명부를 저장소에 든 기본 파일과 <b>똑같이</b> 맞춥니다
+(화면에서 고쳐 둔 것이 있으면 같이 사라집니다).</p>
+<button id=rst class=ghost type=button>기본 명부로 되돌리기</button>
+
 <div id=out></div>
-<p style="font-size:12.5px;color:#6E655C;margin-top:24px">
-  <a href="/">← 처음으로</a> · 지금 상태: <a href="/roster/summary">/roster/summary</a></p>
+<div class=foot>
+  <a href="/">← 처음으로</a><a href="/list">만들어진 리포트</a>
+  <a href="/roster/summary">지금 상태(JSON)</a></div>
 </div><script>
 const f=document.getElementById('f'),out=document.getElementById('out');
+const rst=document.getElementById('rst');
+rst.onclick=async()=>{
+  if(!confirm('명부를 기본 파일과 똑같이 맞춥니다.\\n'+
+              '화면에서 고쳐 두신 것이 있으면 사라집니다. 진행할까요?')) return;
+  rst.disabled=true; out.innerHTML='<p>되돌리는 중…</p>';
+  const r=await fetch('/roster/reset',{method:'POST'});
+  const d=await r.json(); rst.disabled=false;
+  if(!r.ok){ out.innerHTML='<p class=warn>'+(d.detail||'실패')+'</p>'; return; }
+  await report(d);
+};
 f.onsubmit=async e=>{
   e.preventDefault(); out.innerHTML='<p>넣는 중…</p>';
   const r=await fetch('/roster/import',{method:'POST',body:new FormData(f)});
   const d=await r.json();
   if(!r.ok){ out.innerHTML='<p class=warn>'+(d.detail||'실패')+'</p>'; return; }
+  await report(d);
+};
+async function report(d){
   let h='<p class=ok>전체 '+d.total+'명 · 발송 가능 '+d.dispatchable+
         '명 · 제외 '+d.excluded+'명</p>';
   const s=await (await fetch('/roster/summary')).json();
@@ -247,12 +312,13 @@ f.onsubmit=async e=>{
     h+='<table><tr><th>같은 이름</th><th>사번</th></tr>'+
       dup.map(([n,ids])=>'<tr><td>'+n+'</td><td>'+ids.join(', ')+
       '</td></tr>').join('')+'</table>'+
-      '<p style="font-size:12.5px;color:#6E655C">별칭이 있으면 자동으로 갈리고, '+
-      '없으면 담당자에게 묻습니다 (R-15).</p>';
+      '<p style="font-size:12.5px;color:#78787E">평가지에 별칭이 함께 적혀 '+
+      '있으면 자동으로 갈립니다. 없으면 리포트가 보류로 서고, 검수 화면에서 '+
+      '담당자가 본인을 지정해야 풀립니다 (R-15).</p>';
   }
   if(d.skipped.length) h+='<pre>'+d.skipped.map(x=>x.line+'줄 — '+x.reason).join('\\n')+'</pre>';
   out.innerHTML=h;
-};
+}
 </script></body></html>"""
 
 

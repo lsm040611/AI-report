@@ -63,6 +63,13 @@ function note(kind, detail) {
   console.log('[엔진] ' + kind, detail);
 }
 
+// 사람 이름을 마크업에 끼워 넣을 때. 이름에 <>& 가 들어갈 일은 거의 없지만,
+// 거의 없는 것과 없는 것은 다르다.
+function esc(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 const API = {
   async get(path) {
     const r = await fetch(path, { credentials: 'same-origin' });
@@ -955,6 +962,96 @@ Object.assign(Component.prototype, {
     }
   },
 
+  // 동명이인은 **엔진이 고르지 않는다.** 잘못 고르면 남의 평가서가 엉뚱한
+  // 사람에게 가고, 아무도 그걸 모른다. 그래서 담당자에게 묻는데, 지금까지는
+  // 묻기만 하고 답할 자리가 없어서 보류가 영영 안 풀렸다. 그 자리를 만든다.
+  paintPersonPicker(sel, flag) {
+    const host = document.querySelector('[data-hr-hold]');
+    const old = document.getElementById('hr-who');
+    const ids = (flag && flag.candidates) || [];
+    if (!sel || !ids.length || !host) { if (old) old.remove(); return; }
+
+    const stamp = sel.cardId + ':' + ids.join(',');
+    if (old && old.dataset.stamp === stamp) return;
+    if (old) old.remove();
+
+    const box = document.createElement('div');
+    box.id = 'hr-who';
+    box.dataset.stamp = stamp;
+    box.style.cssText = 'margin:10px 0 0;padding:12px 14px;border-radius:10px;'
+      + 'background:#FFF6EE;border:1px solid #F6DCC4;font-size:13px;'
+      + 'color:#8A4A12;line-height:1.6;word-break:keep-all';
+    box.innerHTML = '<b>' + esc(sel.rawName || sel.name) + '</b> 님은 명부에 '
+      + ids.length + '명입니다. 어느 분인지 골라 주세요 — '
+      + '<span style="opacity:.8">잘못 고르면 남의 평가서가 갑니다.</span>'
+      + '<div id=hr-who-list style="margin-top:9px">불러오는 중…</div>';
+    (host.closest('div') || host.parentNode).appendChild(box);
+
+    const list = box.querySelector('#hr-who-list');
+    Promise.all(ids.map((id) =>
+      API.get('/roster?employee_id=' + encodeURIComponent(id))
+        .then((d) => (d.employees || [])[0]).catch(() => null)))
+      .then((rows) => {
+        const found = rows.filter(Boolean);
+        if (!found.length) {
+          list.textContent = '명부에서 후보를 불러오지 못했습니다.'; return;
+        }
+        list.innerHTML = '';
+        found.forEach((e) => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.style.cssText = 'font:inherit;font-size:12.5px;font-weight:600;'
+            + 'background:#fff;color:#1B1B1D;border:1px solid #E4E4E7;'
+            + 'border-radius:999px;padding:7px 14px;margin:0 8px 8px 0;'
+            + 'cursor:pointer;text-align:left';
+          b.textContent = e.employee_id + ' · ' + (e.division || '')
+            + ' ' + (e.team || '') + ' ' + (e.position || '')
+            + (e.email ? '' : ' (메일 없음)');
+          b.onclick = () => {
+            b.disabled = true;
+            this.resolvePerson(sel.cardId, e.employee_id,
+                               e.name_ko + ' ' + (e.position || ''));
+          };
+          list.appendChild(b);
+        });
+      });
+  },
+
+  async resolvePerson(cardId, empId, label) {
+    try {
+      await API.post('/cards/' + cardId + '/person/resolve', {
+        person_id: empId,
+        operator: this.state.memberName || '담당자',
+      });
+    } catch (err) {
+      this.showToast('지정하지 못했습니다 — ' + err.message);
+      return;
+    }
+    const box = document.getElementById('hr-who');
+    if (box) box.remove();
+    this.showToast(label + ' 로 지정했습니다');
+    await this.refreshCards();
+  },
+
+  // 카드 상태를 한 번만 다시 읽는다. 사람을 지정하면 사번·직급·이메일이
+  // 붙고 보류가 풀리는데, 화면이 그걸 모르면 여전히 보류로 보인다.
+  async refreshCards() {
+    const id = this.state.uploadId;
+    if (!id) return;
+    let st;
+    try {
+      st = await API.get('/uploads/' + id + '/status');
+    } catch (err) {
+      this.showToast('상태를 다시 읽지 못했습니다 — ' + err.message);
+      return;
+    }
+    const split = splitMembers(st.cards || []);
+    if (split.audit.selected === undefined) split.audit.selected = false;
+    this.setState({ engineFlags: st.flags || [],
+                    mainMembers: split.regular,
+                    auditMemberData: split.audit });
+  },
+
   hideEmptyAudit(none) {
     const all = document.querySelectorAll('div');
     for (let i = 0; i < all.length; i++) {
@@ -1355,6 +1452,8 @@ Component.prototype.renderVals = function () {
       };
     }
     this.paintHoldReason(holds.join(' · '));
+    this.paintPersonPicker(sel,
+      mine.find((f) => f.code === 'ambiguous_person' && !f.resolved));
   }
 
   // 고른 파일만 보여 준다. **거르는 것은 보이는 목록뿐이다** — 판단(오류가

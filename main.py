@@ -8,7 +8,18 @@
 from __future__ import annotations
 
 import os
+import sys
 import traceback
+
+# 윈도우 명령 창은 cp949 다. 로그에 '—' 한 글자만 섞여도 print 가 예외를
+# 던지고, 그게 서버 기동 중이면 **서버가 아예 안 뜬다.** 로그 한 줄 때문에
+# 서버가 죽는 일은 없어야 하므로, 못 그리는 글자는 흘려보내게 둔다.
+# 다른 것을 하기 전에 먼저 건다 — 아래 import 들이 이미 print 를 한다.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="backslashreplace")
+    except Exception:                                          # noqa: BLE001
+        pass
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse

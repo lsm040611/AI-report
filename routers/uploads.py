@@ -597,6 +597,10 @@ def _flag_list(db: Session, upload_id: int) -> List[dict]:
                         "name": c.person_name,
                         "severity": f.get("severity"),
                         "code": f.get("code"),
+                        # 동명이인이면 후보 사번. 화면이 이걸로 고르는 단추를
+                        # 그린다 — 사유만 알려 주고 답할 자리가 없으면 보류가
+                        # 영영 안 풀린다.
+                        "candidates": f.get("candidates") or None,
                         "message": f.get("message") or f.get("action") or
                                    f.get("code")})
     return out

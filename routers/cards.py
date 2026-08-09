@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Card, CompetencyMapping, PersonResolution
+from models import Card, CompetencyMapping, PersonResolution, RosterEntry
 from pipeline.rules.base import is_sendable, max_severity
 
 router = APIRouter(prefix="/cards", tags=["cards"])
@@ -107,18 +107,38 @@ def approve_mapping(body: MappingApprove, db: Session = Depends(get_db)):
 
 @router.post("/{card_id}/person/resolve")
 def resolve_person(card_id: int, body: PersonResolve, db: Session = Depends(get_db)):
-    """R-15: 담당자의 동명이인 판단을 기억한다."""
+    """R-15: 담당자의 동명이인 판단을 기억한다.
+
+    사번만 적어 두면 부족하다. 이메일·직급·소속도 같이 옮겨야 리포트가
+    "최건우 과장님" 으로 불러 주고 발송도 열린다. 예전에는 사번만 넣어서,
+    담당자가 사람을 골라도 이번엔 `no_email` 로 다시 막혔다.
+    """
     card = _get(db, card_id)
     data = dict(card.card_json)
     person = dict(data.get("person", {}))
     person["person_id"] = body.person_id
+
+    entry = (db.query(RosterEntry)
+               .filter(RosterEntry.person_id == body.person_id).one_or_none())
+    if entry is None:
+        raise HTTPException(404, f"명부에 없는 사번입니다 — {body.person_id}")
+    if entry.email:
+        person["email"] = entry.email          # 고른 사람의 주소로 덮는다
+    for key, val in (("position", entry.position),
+                     ("부서", entry.department), ("팀", entry.team)):
+        if val:
+            person[key] = val
     data["person"] = person
 
-    # 이 판단으로 ambiguous_person hold 가 풀린다
+    # 이 판단으로 신원 때문에 걸려 있던 보류가 전부 풀린다.
+    # no_email 도 같이 본다 — 고른 사람에게 주소가 있으면 남겨 둘 이유가 없다.
+    clears = {"ambiguous_person", "person_not_in_roster"}
+    if entry.email:
+        clears.add("no_email")
     flags = []
     for f in data.get("flags", []):
         f = dict(f)
-        if f.get("code") in ("ambiguous_person", "person_not_in_roster"):
+        if f.get("code") in clears:
             f.update({"resolved": True, "decision": "approve",
                       "resolved_by": body.operator})
         flags.append(f)
