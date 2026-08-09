@@ -352,7 +352,10 @@ Object.assign(Component.prototype, {
       return byCard[sel.cardId] || (s.reportIdByName || {})[sel.name] || null;
     }
     if (s.view === 'member-report') {
-      return (s.reportIdByName || {})[s.memberName] || null;
+      // 어느 과정의 리포트인지로 찾는다. 같은 사람이 과정마다 다른 리포트를
+      // 갖고 있으므로 이름만으로는 어느 것인지 정해지지 않는다.
+      return (s.memberReportByCourse || {})[s.currentReportCourse]
+        || (s.reportIdByName || {})[s.memberName] || null;
     }
     return null;
   },
@@ -448,6 +451,63 @@ Object.assign(Component.prototype, {
     } catch (err) {
       this.setState({ sendStage: 'before' });
       this.showToast('발송 실패 — ' + err.message);
+    }
+  },
+
+  // ── 구성원 화면 — 로그인한 사번의 리포트를 불러온다 ─────────────────
+  // 담당자가 만든 리포트를 그 사람이 로그인해서 바로 볼 수 있어야 한다.
+  // 사번으로 찾는다 — 이름으로 찾다가 남의 리포트를 보여 주면 그게 제일 나쁘다.
+  async loadMyReports(empId) {
+    const key = (empId || '').trim();
+    if (!key || this._mineOf === key) return;
+    this._mineOf = key;
+    try {
+      const d = await API.get('/reports/mine?empId=' + encodeURIComponent(key));
+      if (this._mineOf !== key) return;
+      note('내 리포트', { 사번: key, 과정: (d.courses || []).length,
+                         리포트: d.total });
+
+      const courses = [], byCourse = {};
+      (d.courses || []).forEach((c) => {
+        const rounds = c.rounds || [];
+        const last = rounds[rounds.length - 1] || {};
+        const ck = c.courseId || ('c' + courses.length);
+        byCourse[ck] = last.reportId;
+        courses.push({
+          key: ck,
+          type: TYPE_FROM_ENGINE[c.sourceType] || 'accumulated',
+          title: c.title,
+          instructor: c.instructor || '미지정',
+          isNew: true,
+          rounds: rounds.map((r, i) => ({
+            roundLabel: r.round || (i + 1) + '차',
+            score: r.score, date: r.date })),
+          roundsCount: rounds.length,
+          reportLinkLabel: '리포트 보기',
+          baseDate: last.date || '',
+          reportScore: last.score === null || last.score === undefined
+            ? '-' : last.score,
+          // 회차가 둘 이상이면 성장 비교가 붙는다 (R-14)
+          hasComparison: rounds.length > 1,
+          comparisonLabel: rounds.length > 1
+            ? `성장 비교 (${rounds[rounds.length - 2].round} → ${last.round})` : '',
+          noticeText: rounds.length > 1 ? null
+            : '다음 회차부터 성장 비교가 시작됩니다',
+        });
+      });
+
+      this.setState({
+        memberExtraCourses: courses,
+        memberReportByCourse: byCourse,
+        memberName: (d.person && d.person.name) || this.state.memberName,
+        memberEmpId: key,
+      });
+      if (!courses.length) {
+        this.showToast(key + ' 로 받은 리포트가 아직 없습니다');
+      }
+    } catch (err) {
+      this._mineOf = null;
+      this.showToast('내 리포트를 못 읽었습니다 — ' + err.message);
     }
   },
 
@@ -905,6 +965,11 @@ Component.prototype._syncReport = function () {
     this.loadCourseList();          // '다른 과정 선택' 목록을 엔진 것으로 채운다
   }
   if (s.view === 'admin-review') this.paintReviewTabs();
+
+  // 구성원으로 들어오면 그 사번의 리포트를 불러온다
+  if (s.view === 'member' || s.view === 'member-report') {
+    this.loadMyReports(s.employeeId || s.memberEmpId);
+  }
 
   if (s.view === 'admin' && s.subTab === 'insight') {
     this.loadCourseList();

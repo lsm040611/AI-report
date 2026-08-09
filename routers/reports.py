@@ -89,7 +89,7 @@ def build_report(db: Session, card: Card) -> Report:
     return report
 
 
-@router.get("/{report_id}")
+@router.get("/{report_id:int}")
 def get_report(report_id: int, db: Session = Depends(get_db)):
     report = db.get(Report, report_id)
     if not report:
@@ -98,7 +98,7 @@ def get_report(report_id: int, db: Session = Depends(get_db)):
             "status": report.status, "body": report.body}
 
 
-@router.get("/{report_id}/html", response_class=HTMLResponse)
+@router.get("/{report_id:int}/html", response_class=HTMLResponse)
 def report_html(report_id: int, db: Session = Depends(get_db)):
     """완성된 리포트 HTML 한 편. 브라우저에서 Ctrl+P → 'PDF로 저장' 하면 PDF가 된다."""
     report = db.get(Report, report_id)
@@ -110,7 +110,7 @@ def report_html(report_id: int, db: Session = Depends(get_db)):
 # ══════════════════════════════════════════════════════════════
 # UI 통합 지점 ③ — 카드 → 리포트 본문 렌더
 # ══════════════════════════════════════════════════════════════
-@router.get("/{report_id}/body")
+@router.get("/{report_id:int}/body")
 def report_body(report_id: int, scope: Optional[str] = None,
                 db: Session = Depends(get_db)):
     """리포트 **본문만** 조각으로 준다. UI 의 placeholder 자리에 그대로 넣는다.
@@ -141,7 +141,7 @@ def report_body(report_id: int, scope: Optional[str] = None,
     }
 
 
-@router.get("/{report_id}/evidence")
+@router.get("/{report_id:int}/evidence")
 def report_evidence(report_id: int, sentence_id: Optional[str] = None,
                     db: Session = Depends(get_db)):
     """문장 id → 근거. 검수 화면에서 문장을 클릭하면 이걸 부른다 (R-16 대조).
@@ -202,7 +202,7 @@ def _render_pdf(html: str) -> Optional[bytes]:
     return HTML(string=html).write_pdf()
 
 
-@router.get("/{report_id}/pdf")
+@router.get("/{report_id:int}/pdf")
 def report_pdf(report_id: int, db: Session = Depends(get_db)):
     """PDF 로 내려준다. WeasyPrint 가 없으면 같은 내용의 인쇄용 HTML 을 준다."""
     report = db.get(Report, report_id)
@@ -247,13 +247,75 @@ def prepare_pdfs(upload_id: int, db: Session = Depends(get_db)):
     return {"uploadId": upload_id, "engine": engine_name, "items": out}
 
 
+# ══════════════════════════════════════════════════════════════
+# 구성원 화면 — 내 리포트만
+# ══════════════════════════════════════════════════════════════
+@router.get("/mine")
+def my_reports(empId: Optional[str] = None, name: Optional[str] = None,
+               sentOnly: bool = False, db: Session = Depends(get_db)):
+    """이 사람의 리포트만 과정별로 묶어 돌려준다.
+
+    사번으로 찾는 것이 원칙이다. 이름은 같은 사람이 여럿일 수 있어서, 사번이
+    있으면 그쪽만 쓴다 — 이름으로 찾다가 남의 리포트를 보여 주면 그게 가장
+    나쁜 사고다.
+
+    `sentOnly=1` 이면 발송된 것만 준다. 계약상 구성원은 발송된 리포트만 보는
+    것이 맞지만, 시연에서는 보내기 전에도 확인해야 해서 기본은 전부다.
+    """
+    if not (empId or name):
+        raise HTTPException(400, "empId 또는 name 이 필요합니다")
+
+    q = db.query(Card)
+    if empId:
+        q = q.filter(Card.person_id == empId)
+    else:
+        q = q.filter(Card.person_name == name)
+    cards = [c for c in q.all() if c.report]
+    if sentOnly:
+        cards = [c for c in cards if c.report.sent_at]
+
+    who = None
+    if cards:
+        who = {"name": cards[0].person_name, "empId": cards[0].person_id}
+    elif empId:
+        from models import RosterEntry
+        r = db.query(RosterEntry).filter(RosterEntry.person_id == empId).first()
+        who = {"name": r.name, "empId": r.person_id} if r else None
+
+    titles = {c.course_id: c for c in db.query(Course).all()}
+    groups: Dict[str, dict] = {}
+    for c in sorted(cards, key=lambda x: (x.session_date or "", x.id)):
+        cid = (c.card_json.get("context") or {}).get("_course_id") or "_"
+        course = titles.get(cid)
+        g = groups.setdefault(cid, {
+            "courseId": cid if cid != "_" else None,
+            "title": (course.title if course else c.course_name) or "과정 미상",
+            "sourceType": c.source_type,
+            "instructor": course.instructor if course else None,
+            "rounds": [],
+        })
+        summary = c.card_json.get("score_summary") or {}
+        g["rounds"].append({
+            "reportId": c.report.id,
+            "cardId": c.id,
+            "round": c.round_label or "",
+            "date": c.session_date or "",
+            "score": summary.get("average"),
+            "sent": bool(c.report.sent_at),
+            "html": f"/reports/{c.report.id}/html",
+        })
+
+    return {"person": who, "courses": list(groups.values()),
+            "total": sum(len(g["rounds"]) for g in groups.values())}
+
+
 @router.get("/mail/status")
 def mail_status():
     """발송 준비가 됐는지. 화면이 버튼 옆에 이 상태를 띄운다."""
     return mailer.status()
 
 
-@router.post("/{report_id}/send")
+@router.post("/{report_id:int}/send")
 def send_report(report_id: int, db: Session = Depends(get_db)):
     """리포트를 **본인 주소로만** 보낸다.
 
@@ -325,7 +387,7 @@ def send_upload(upload_id: int, db: Session = Depends(get_db)):
             "total": len(results), "mail": mailer.status(), "results": results}
 
 
-@router.post("/{report_id}/review")
+@router.post("/{report_id:int}/review")
 def review(report_id: int, operator: str, db: Session = Depends(get_db)):
     report = db.get(Report, report_id)
     if not report:
