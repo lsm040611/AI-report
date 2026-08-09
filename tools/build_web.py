@@ -54,6 +54,8 @@ def main() -> None:
     raw, dropped = _strip_fonts(raw)
     print(f"  폰트 {dropped['count']}개 뺌 ({dropped['bytes']:,} 바이트) → {len(raw):,}자")
 
+    raw = _link_webfont(raw)
+
     raw = _apply_patch(raw)
     _verify(raw)
 
@@ -110,6 +112,30 @@ def _find() -> str:
         if cands:
             return max(cands, key=os.path.getmtime)
     return ""
+
+
+# 뺀 TTF 가 담고 있던 서체. 같은 것을 CDN 에서 불러온다.
+# 16MB 를 안고 가는 대신 링크 한 줄이면 되고, 인터넷이 없으면 시스템 서체로
+# 떨어질 뿐이라 화면이 깨지지는 않는다.
+WEBFONT = ("https://cdn.jsdelivr.net/gh/wanteddev/wanted-sans@v1.0.3"
+           "/packages/wanted-sans/fonts/webfonts/variable/complete"
+           "/WantedSansVariable.min.css")
+
+
+def _link_webfont(raw: str) -> str:
+    """빼 버린 Wanted Sans 를 CDN 링크로 되살린다."""
+    if WEBFONT in raw:
+        return raw
+    # 번들 안의 <head> 는 이스케이프돼 있다
+    for head, ins in (("<head>", "<head>"), ("<head>\\n", "<head>\\n")):
+        if head in raw:
+            link = (f'<link rel=\\"stylesheet\\" href=\\"{WEBFONT}\\">'
+                    if "\\\"" in raw[:4000] else
+                    f'<link rel="stylesheet" href="{WEBFONT}">')
+            print("  서체를 CDN 으로 되살렸습니다 (Wanted Sans)")
+            return raw.replace(head, ins + link, 1)
+    print("  ! <head> 를 찾지 못해 서체 링크를 넣지 못했습니다")
+    return raw
 
 
 def _strip_fonts(raw: str):

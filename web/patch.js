@@ -382,6 +382,15 @@ Object.assign(Component.prototype, {
   },
 
   // ── ③ 리포트 본문 · 근거 ──────────────────────────────────────────
+  // 지금 고른 사람의 문장이 아직 안 만들어졌는가.
+  // 생성이 돌고 있거나(_watching), 이 사람 리포트가 아직 없으면 그렇다.
+  _stillGenerating() {
+    if (this._watching) return true;
+    const s = this.state;
+    if (!s.uploadId) return false;              // 올린 적이 없으면 상관없다
+    return !this.currentReportId();
+  },
+
   currentReportId() {
     const s = this.state;
     if (s.view === 'admin-review') {
@@ -1044,6 +1053,12 @@ Component.prototype.componentDidMount = function () {
     this[name] = (...args) => {
       const list = this.state.mainMembers || [];
       if (!list[this.state.selectedIdx]) return;      // 고른 사람이 없다
+      // 문장이 아직 안 만들어졌는데 승인하면, 담당자가 본 것이 없는 채로
+      // 통과시키는 셈이다. 검수는 '보고 나서' 판단하는 일이다.
+      if (name === 'approveSelected' && this._stillGenerating()) {
+        this.showToast('아직 문장 생성이 안 됐습니다 — 끝나면 승인해 주세요');
+        return;
+      }
       return original.apply(this, args);
     };
   });
@@ -1134,6 +1149,15 @@ Component.prototype.renderVals = function () {
   props.generateReport = () => this.realGenerate();
   props.startSend = () => this.realSend();
   props.testSend = () => this.realTestSend();
+
+  // 문장이 만들어지는 중에는 승인·발송으로 넘어가지 못하게 한다.
+  // 검수는 보고 나서 하는 일이고, 발송은 되돌릴 수 없다.
+  if (this._watching) {
+    const wait = (what) => () =>
+      this.showToast('아직 문장 생성이 안 됐습니다 — 끝나면 ' + what);
+    props.askBulkApprove = wait('일괄 승인해 주세요');
+    props.goAdminSend = wait('발송 단계로 넘어가 주세요');
+  }
 
   // 판정 근거는 엔진이 준 문장을 그대로 보여 준다 (통합 명세 §2-①)
   if (s.engineTypeReason) props.reportTypeReason = s.engineTypeReason;

@@ -18,34 +18,40 @@ from typing import Any, Dict, List, Optional
 # 1. 스타일 — 시안 v2 확정본
 # ══════════════════════════════════════════════════════════════
 CSS = """
+@import url('https://cdn.jsdelivr.net/gh/wanteddev/wanted-sans@v1.0.3/packages/wanted-sans/fonts/webfonts/variable/complete/WantedSansVariable.min.css');
+/* 화면(프로토타입)과 같은 서체·색을 쓴다. 리포트만 따로 놀면 같은 제품으로
+   보이지 않는다. 토큰 **이름**은 그대로 두고 값만 갈아끼웠다 — 아래 규칙
+   163개가 전부 이 이름을 참조하고 있어서, 이름을 바꾸면 다 고쳐야 한다.
+   인터넷이 안 되면 서체만 시스템 것으로 떨어지고 나머지는 그대로다. */
 :root{
-  --sk-red:#DA1B33;          /* 포인트 — 선·배지·숫자에만 */
-  --sk-red-deep:#A00E22;
-  --sk-red-soft:#FBE9EA;
-  --butter:#FAF1DC;          /* 머리부 · 강조 패널 */
-  --butter-2:#F5E7C4;        /* 패널 안쪽 톤 */
-  --cream:#FBF5E4;           /* 섹션 배경 */
-  --cream-2:#F2E9D6;         /* 칩 · 보조 배경 */
-  --page:#F0E8D6;            /* 지면 바깥 */
+  --sk-red:#EA002C;          /* 포인트 — 선·배지·숫자에만 (프론트 action-red) */
+  --sk-red-deep:#B80023;
+  --sk-red-soft:#FDE9ED;
+  --butter:#FAFAFC;          /* 머리부 · 강조 패널 (pearl) */
+  --butter-2:#F2F2F5;        /* 패널 안쪽 톤 */
+  --cream:#FAFAFC;           /* 섹션 배경 */
+  --cream-2:#F5F5F7;         /* 칩 · 보조 배경 (parchment) */
+  --page:#F5F5F7;            /* 지면 바깥 */
   --paper:#FFFFFF;
-  --gold:#D9A521;            /* 강점 표시 */
-  --ink:#231D18;
-  --ink-2:#4A423A;
-  --muted:#6E655C;
-  --faint:#9C9188;
-  --line:#E2D7C0;
-  --line-2:#EFE8D9;
-  --up:#0B6151;   --up-soft:#E6F0EC;  --up-line:#CBDFD8;
-  --down:#A84A1A; --down-soft:#F8EBE0;
-  --warn:#8A5209; --warn-soft:#FBF0DA; --warn-line:#E6D2A8;
-  --sans:'Pretendard','Pretendard Variable',-apple-system,BlinkMacSystemFont,'Segoe UI','Malgun Gothic','맑은 고딕',sans-serif;
-  --mono:'SFMono-Regular',Consolas,'D2Coding','Menlo',monospace;
+  --gold:#F47725;            /* 강점 표시 (프론트 sub-orange) */
+  --ink:#1B1B1D;
+  --ink-2:#48484D;
+  --muted:#78787E;
+  --faint:#AFAFB5;
+  --line:#E4E4E7;
+  --line-2:#F0F0F2;
+  --up:#1C8A53;   --up-soft:#E8F4EE;  --up-line:#C9E3D5;
+  --down:#B80023; --down-soft:#FDE9ED;
+  --warn:#B4540F; --warn-soft:#FDF1E7; --warn-line:#F3D6BC;
+  --sans:'Wanted Sans','Noto Sans KR','Pretendard',-apple-system,BlinkMacSystemFont,'Segoe UI','Malgun Gothic','맑은 고딕',sans-serif;
+  --mono:'IBM Plex Mono','SFMono-Regular',Consolas,'D2Coding','Menlo',monospace;
 }
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:var(--sans);background:var(--page);color:var(--ink);
   font-size:15.5px;line-height:1.75;-webkit-font-smoothing:antialiased;padding:34px 16px 60px}
 .sheet{max-width:780px;margin:0 auto;background:var(--paper);
-  border:1px solid var(--line);border-radius:3px;overflow:hidden}
+  border:1px solid var(--line);border-radius:14px;overflow:hidden;
+  box-shadow:0 1px 3px rgba(0,0,0,.04),0 8px 28px rgba(0,0,0,.05)}
 
 /* ── 머리부 ── */
 .masthead{background:var(--butter);border-top:6px solid var(--sk-red);padding:32px 46px 28px}
