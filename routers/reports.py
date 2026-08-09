@@ -154,7 +154,11 @@ def report_evidence(report_id: int, sentence_id: Optional[str] = None,
     """
     report = db.get(Report, report_id)
     if not report:
-        raise HTTPException(404, "리포트 없음")
+        # 화면을 열어 둔 채 서버가 다시 뜨면 리포트가 사라진다(무료 요금제).
+        # '리포트 없음' 다섯 글자로는 자기가 뭘 잘못했는지 찾게 된다.
+        raise HTTPException(404, f"리포트 {report_id} 번이 없습니다. "
+                                 f"서버가 다시 시작되면 만들어 둔 것이 "
+                                 f"사라집니다 — 파일을 다시 올려 주십시오.")
     items = (report.body.get("presentation") or {}).get("evidence") or []
     if sentence_id:
         found = next((e for e in items if e["sentenceId"] == sentence_id), None)

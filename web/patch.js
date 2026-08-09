@@ -139,6 +139,11 @@ function toMember(c) {
   return {
     file: c.file || '',
     round: c.round || '',
+    position: c.position || '',
+    // 화면에는 '강지우 대리' 로 부른다. 명부와 맞춰 붙인 직급이다.
+    // 이름만 있으면 누구인지 감이 안 오고, 동명이인도 가릴 수 없다.
+    name: c.position ? c.name + ' ' + c.position : c.name,
+    rawName: c.name,
     // **반드시 문자열이어야 한다.** 화면 어딘가가 empId.toLowerCase() 를 부른다.
     // 사번 없는 카드에 숫자 cardId 를 넣었더니 renderVals() 가 통째로 터졌고,
     // 화면이 아무것도 안 그려졌다. 평가지에 사번이 없는 파일이 흔하다.
@@ -159,9 +164,11 @@ function splitMembers(cards) {
   });
   return {
     regular,
+    // 청강생이 없으면 **없다고 표시한다.** 자리를 채우려고 가짜 한 명을 두면
+    // 3명짜리 파일이 4명으로 세어진다 — 실제로 그렇게 보였다.
     audit: audit.length
       ? { ...audit[0], sendIncluded: false, decided: false, selected: false }
-      : { name: '없음', empId: '—', status: 'unreviewed',
+      : { name: '', empId: '', status: 'none', empty: true,
           sendIncluded: false, decided: true, selected: false },
   };
 }
@@ -626,14 +633,19 @@ Object.assign(Component.prototype, {
       const ev = await API.get('/reports/' + reportId + '/evidence');
       if (this._evidenceOf !== reportId) return;
       this.setState({
+        // 어느 리포트에서 온 문장인지 함께 담는다. 클릭할 때 다시 계산하면
+        // 그새 고른 사람이 바뀌었거나 서버가 재시작돼 엉뚱한 곳을 찾는다.
         engineSentences: (ev.items || []).map((x) => ({
-          id: x.sentenceId, text: x.aiText, aiText: x.aiText,
+          id: x.sentenceId, reportId: reportId,
+          text: x.aiText, aiText: x.aiText,
           sourceRef: x.sourceRef, sourceText: x.sourceText,
         })),
         reviewSelectedSentenceId: null,
+        engineEvidence: null,
       });
     } catch (err) {
       this._evidenceOf = null;
+      this.setState({ engineSentences: [], engineEvidence: null });
     }
   },
 });
@@ -818,6 +830,24 @@ Object.assign(Component.prototype, {
       })),
       this.state.reviewFileFilter,
       (key) => this.setState({ reviewFileFilter: key, selectedIdx: 0 }));
+  },
+
+  // '청강 (발송 보류)' 머리와 그 아래 줄을 통째로 감춘다.
+  // 마크업이 늘 그리는 자리라 상태로는 없앨 수 없고, DOM 에서 지워야 한다.
+  hideEmptyAudit(none) {
+    if (this._auditHidden === none) return;
+    this._auditHidden = none;
+    const all = document.querySelectorAll('div');
+    for (let i = 0; i < all.length; i++) {
+      const n = all[i];
+      if (n.children.length === 0
+          && n.textContent.trim() === '청강 (발송 보류)') {
+        n.style.display = none ? 'none' : '';
+        const row = n.nextElementSibling;
+        if (row) row.style.display = none ? 'none' : '';
+        return;
+      }
+    }
   },
 
   _findReviewAnchor() {
@@ -1115,7 +1145,9 @@ Component.prototype.renderVals = function () {
       ...sent,
       bg: s.reviewSelectedSentenceId === sent.id
         ? 'var(--surface-pearl)' : 'transparent',
-      onSelect: () => this.showEvidence(this.currentReportId(), sent.id),
+      // 문장이 실려 온 리포트를 그대로 쓴다 — 클릭 시점에 다시 계산하지 않는다
+      onSelect: () => this.showEvidence(sent.reportId || this.currentReportId(),
+                                        sent.id),
     }));
     props.reviewEvidence = s.engineEvidence || null;
     // 비어 있을 때 아무것도 안 보이면 고장인지 아직인지 알 수 없다
@@ -1126,6 +1158,20 @@ Component.prototype.renderVals = function () {
       props.reviewFeedbackSentences = [
         { id: '_', text: why, bg: 'transparent', onSelect: () => {} }];
     }
+  }
+
+  // 청강생이 없으면 그 칸을 감춘다. 마크업은 늘 그리므로 DOM 에서 지운다.
+  // 자리만 채운 빈 줄이 남아 있으면 3명짜리 파일이 4명으로 보인다.
+  if (s.view === 'admin-review') {
+    const none = (s.auditMemberData || {}).empty;
+    props.auditPendingCount = none ? 0 : props.auditPendingCount;
+    props.totalTargetCount = (s.mainMembers || []).length;
+    if (none && props.auditMember) {
+      props.auditMember = { ...props.auditMember, name: '없음',
+                            empId: '', badgeLabel: '해당 없음',
+                            badgeTone: 'neutral' };
+    }
+    this.hideEmptyAudit(none);
   }
 
   // 고른 파일만 보여 준다. **거르는 것은 보이는 목록뿐이다** — 판단(오류가

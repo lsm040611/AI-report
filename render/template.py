@@ -858,12 +858,18 @@ def render_masthead(card: dict) -> str:
 
     # 직급이 있으면 '강지우 대리님', 없으면 '강지우 님'.
     # 직급을 아는데도 이름만 부르면 사내 문서에서는 어색하다.
-    if p.get("honorific") is False:
-        title = esc(p.get("name"))
+    #
+    # 이름이 비면 '님' 한 글자만 남는다. 그건 받는 사람에게 아무 뜻이 없고,
+    # 무엇이 잘못됐는지도 알려 주지 않는다. 그럴 땐 모른다고 말한다.
+    name = (p.get("name") or "").strip()
+    if not name:
+        title = "이름 미상"
+    elif p.get("honorific") is False:
+        title = esc(name)
     elif p.get("position"):
-        title = f'{esc(p.get("name"))} {esc(p["position"])}님'
+        title = f'{esc(name)} {esc(p["position"])}님'
     else:
-        title = f'{esc(p.get("name"))} 님'
+        title = f'{esc(name)} 님'
 
     where = f'<div class="where">{esc(p["team"])}</div>' if p.get("team") else ""
     return (f'<div class="masthead">{eyebrow}'

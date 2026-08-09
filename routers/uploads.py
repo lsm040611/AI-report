@@ -570,6 +570,9 @@ def _card_briefs(db: Session, upload_id: int) -> List[dict]:
         ok, reason = is_sendable(c.card_json)
         person = c.card_json.get("person") or {}
         out.append({"cardId": c.id, "name": c.person_name,
+                    # 명부에서 온 직급. 화면이 '강지우 대리' 로 부르는 데 쓴다
+                    "position": person.get("position"),
+                    "team": person.get("팀") or person.get("부서"),
                     # 여러 파일을 함께 올리면 화면이 파일별로 갈라 보여 준다
                     "file": c.source_file, "round": c.round_label,
                     # 사번은 없을 수 있다. 화면이 문자열로 다루므로 None 을

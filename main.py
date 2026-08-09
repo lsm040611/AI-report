@@ -82,15 +82,27 @@ def rules():
 
 
 @app.get("/mailcheck")
-def mailcheck():
+def mailcheck(port: int = 0, host: str = ""):
     """메일 서버까지 실제로 닿는지. **보내지는 않는다.**
 
-    /health 옆에 로그인 없이 둔다 — 설정이 들어갔는지, 포트가 열려 있는지
-    확인하려고 매번 로그인해서 들어가야 하면 고치는 데 시간만 든다.
-    비밀번호는 담지 않는다.
+    `?port=465` 처럼 다른 포트도 시험해 볼 수 있다. 호스팅이 587 을 막고
+    465 는 열어 두는 경우가 있어서, 설정을 바꿔 가며 재배포하지 않고
+    여기서 바로 확인한다.
+
+    /health 옆에 로그인 없이 둔다 — 설정이 들어갔는지 확인하려고 매번
+    로그인해서 들어가야 하면 고치는 데 시간만 든다. 비밀번호는 담지 않는다.
     """
+    import dataclasses
+
     import mailer
-    return mailer.check()
+    cfg = mailer.config()
+    if port or host:
+        cfg = dataclasses.replace(cfg, port=port or cfg.port,
+                                  host=host or cfg.host,
+                                  use_ssl=(port == 465) if port else cfg.use_ssl)
+    out = mailer.check(cfg)
+    out["tried"] = f"{cfg.host}:{cfg.port}"
+    return out
 
 
 @app.get("/health")
