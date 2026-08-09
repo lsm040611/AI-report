@@ -137,6 +137,8 @@ const SEVERITY_TO_STATUS = {
 };
 function toMember(c) {
   return {
+    file: c.file || '',
+    round: c.round || '',
     // **반드시 문자열이어야 한다.** 화면 어딘가가 empId.toLowerCase() 를 부른다.
     // 사번 없는 카드에 숫자 cardId 를 넣었더니 renderVals() 가 통째로 터졌고,
     // 화면이 아무것도 안 그려졌다. 평가지에 사번이 없는 파일이 흔하다.
@@ -560,6 +562,54 @@ function insightText(host, lines) {
 // 3차 평가결과.xlsx" 라고 나온 것이 이것이다. 실제 값으로 갈아끼운다.
 const DUMMY_FILE = '리더십교육_3차_평가결과.xlsx';
 
+// ── 파일 고르개 ──────────────────────────────────────────────────────
+// 여러 개를 함께 올리면 표가 한 덩어리로 길어져, 어느 파일 얘기인지 알 수 없다.
+// 파일마다 단추를 두고 눌러서 갈라 본다. 자료를 나누는 게 아니라 **보는 것만**
+// 나눈다 — 회차 간 성장 비교는 카드가 다 모여야 붙기 때문이다.
+function fileTabs(anchor, id, files, current, pick) {
+  if (!anchor || files.length < 2) {
+    const old = document.getElementById(id);
+    if (old) old.remove();
+    return;
+  }
+  let bar = document.getElementById(id);
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = id;
+    bar.setAttribute('style',
+      'display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px');
+    anchor.parentNode.insertBefore(bar, anchor);
+  }
+  const items = [{ key: null, label: '전체', n: 0 }].concat(
+    files.map((f) => ({ key: f.name, label: f.label, n: f.n })));
+  bar.innerHTML = '';
+  items.forEach((it) => {
+    const on = (current || null) === it.key;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = it.label + (it.n ? '  ' + it.n : '');
+    b.setAttribute('style', [
+      'font:inherit', 'font-size:12px', 'font-weight:600',
+      'height:28px', 'padding:0 14px', 'border-radius:999px',
+      'cursor:pointer', 'white-space:nowrap',
+      on ? 'background:var(--color-action-red,#DA1B33)' : 'background:#fff',
+      on ? 'color:#fff' : 'color:#4A423A',
+      'border:1px solid ' + (on ? 'var(--color-action-red,#DA1B33)'
+                                : 'var(--border,#E2D7C0)'),
+    ].join(';'));
+    b.onclick = () => pick(it.key);
+    bar.appendChild(b);
+  });
+}
+
+function shortName(name) {
+  // '20260519_1차수_A조.xlsx' → '1차수 A조'. 날짜와 확장자는 단추에서 군더더기다.
+  let s = String(name || '').replace(/\.xlsx?$|\.xlsm$/i, '');
+  s = s.replace(/^\d{6,8}[_\-\s]*/, '');
+  s = s.replace(/[_]+/g, ' ').trim();
+  return s || name || '파일';
+}
+
 Object.assign(Component.prototype, {
   paintUploadHeader() {
     const name = this.state.engineFileName;
@@ -585,6 +635,62 @@ Object.assign(Component.prototype, {
       }
       return;
     }
+  },
+
+  // 검증 화면 — '데이터 검증 결과' 표 위에 파일 단추를 둔다
+  paintValidateTabs() {
+    const files = ((HR_DEBUG.analyze || {}).files || []);
+    if (files.length < 2) return;
+    const rows = this.state.validationRows || [];
+    const all = document.querySelectorAll('div');
+    let head = null;
+    for (let i = 0; i < all.length; i++) {
+      if (all[i].children.length === 0
+          && all[i].textContent.trim() === '데이터 검증 결과') {
+        head = all[i].parentNode;               // 제목과 칩이 든 줄
+        break;
+      }
+    }
+    fileTabs(head, 'hr-files-validate',
+      files.map((f) => ({
+        name: f.name, label: shortName(f.name),
+        n: rows.filter((r) => r.file === f.name && !r.resolved).length,
+      })),
+      this.state.fileFilter,
+      (key) => this.setState({ fileFilter: key }));
+  },
+
+  // 검수 화면 — 구성원 목록 위에 같은 단추를 둔다
+  paintReviewTabs() {
+    const members = this.state.mainMembers || [];
+    const names = [];
+    members.forEach((m) => {
+      if (m.file && names.indexOf(m.file) < 0) names.push(m.file);
+    });
+    if (names.length < 2) return;
+    const chip = document.querySelector('[data-hr-review-anchor]')
+      || this._findReviewAnchor();
+    fileTabs(chip, 'hr-files-review',
+      names.map((n) => ({
+        name: n, label: shortName(n),
+        n: members.filter((m) => m.file === n).length,
+      })),
+      this.state.reviewFileFilter,
+      (key) => this.setState({ reviewFileFilter: key, selectedIdx: 0 }));
+  },
+
+  _findReviewAnchor() {
+    // 필터 칩('전체 N')이 든 줄 바로 위에 붙인다
+    const all = document.querySelectorAll('div');
+    for (let i = 0; i < all.length; i++) {
+      const t = all[i].textContent || '';
+      if (all[i].children.length >= 3 && t.indexOf('미검토') >= 0
+          && t.indexOf('승인') >= 0 && t.length < 60) {
+        all[i].setAttribute('data-hr-review-anchor', '1');
+        return all[i];
+      }
+    }
+    return null;
   },
 
   paintInsight() {
@@ -795,8 +901,10 @@ Component.prototype._syncReport = function () {
 
   if (s.view === 'admin-validate') {
     this.paintUploadHeader();
+    this.paintValidateTabs();
     this.loadCourseList();          // '다른 과정 선택' 목록을 엔진 것으로 채운다
   }
+  if (s.view === 'admin-review') this.paintReviewTabs();
 
   if (s.view === 'admin' && s.subTab === 'insight') {
     this.loadCourseList();
@@ -872,6 +980,19 @@ Component.prototype.renderVals = function () {
       props.reviewFeedbackSentences = [
         { id: '_', text: why, bg: 'transparent', onSelect: () => {} }];
     }
+  }
+
+  // 고른 파일만 보여 준다. **거르는 것은 보이는 목록뿐이다** — 판단(오류가
+  // 몇 건 남았나, 버튼을 켜도 되나)은 언제나 전체를 놓고 한다. 한 파일만
+  // 보고 있다고 다른 파일의 오류가 없는 셈이 되면 안 된다.
+  if (s.fileFilter && props.validationRows) {
+    const src = s.validationRows || [];
+    props.validationRows = props.validationRows
+      .filter((_, i) => (src[i] || {}).file === s.fileFilter);
+  }
+  if (s.reviewFileFilter && props.visibleMembers) {
+    props.visibleMembers = props.visibleMembers
+      .filter((m) => !m.file || m.file === s.reviewFileFilter);
   }
 
   // '리포트 생성' 버튼이 켜지는 조건.
