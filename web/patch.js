@@ -587,8 +587,9 @@ Object.assign(Component.prototype, {
           hasComparison: rounds.length > 1,
           comparisonLabel: rounds.length > 1
             ? `성장 비교 (${rounds[rounds.length - 2].round} → ${last.round})` : '',
-          noticeText: rounds.length > 1 ? null
-            : '다음 회차부터 성장 비교가 시작됩니다',
+          // 이 문구가 들어가는 칸은 높이가 46px 로 박혀 있다. 길면 넘쳐서
+          // 잘린 것처럼 보인다 — 짧게 적는다.
+          noticeText: rounds.length > 1 ? null : '다음 회차부터 비교됩니다',
         });
       });
 
@@ -847,6 +848,60 @@ Object.assign(Component.prototype, {
       (key) => this.setState({ reviewFileFilter: key, selectedIdx: 0 }));
   },
 
+  // 처음 화면(담당자 / 구성원 선택)으로 돌아간다.
+  //
+  // 화면에 남은 것을 **같이 비운다.** 담당자로 올린 명단이 남아 있으면
+  // 구성원으로 다시 들어갔을 때 남의 자료가 보인다. 서버에 만들어 둔
+  // 리포트는 그대로 있고(/list 에서 볼 수 있다), 화면 기억만 지운다.
+  logoutToLanding() {
+    this._watching = null;
+    this._sending = null;
+    this._mineOf = null;
+    this._evidenceOf = null;
+    this._bodyShown = null;
+    this._insightOf = null;
+    this.paintProgress(null);
+
+    this.setState({
+      view: 'landing', deepLink: false,
+      employeeId: '', password: '', loginError: '',
+      draftId: null, uploadId: null,
+      mainMembers: [], validationRows: [], excludedRows: [],
+      auditMemberData: { name: '', empId: '', status: 'none', empty: true,
+                         sendIncluded: false, decided: true, selected: false },
+      selectedIdx: 0,
+      reportIdByCard: {}, reportIdByName: {},
+      engineSentences: null, engineEvidence: null, engineFlags: [],
+      engineAnalysis: null, engineSummary: null, engineContext: null,
+      engineFileName: null, engineCourses: null, engineInsight: null,
+      memberExtraCourses: [], memberReportByCourse: {},
+      memberName: '', memberEmpId: '',
+      sendStage: 'before', sendRows: null,
+      fileFilter: null, reviewFileFilter: null,
+      courseLinkStatus: 'idle', linkedCourseKey: null,
+      courseLinkChoiceLabel: '', newCourseName: '',
+    });
+    this._courseListLoaded = false;
+    this.showToast('로그아웃했습니다');
+  },
+
+  // 구성원 화면의 안내 칸은 높이가 46·56px 로 박혀 있다. 글자가 두 줄만
+  // 되어도 넘쳐서 잘린 것처럼 보인다. 칸이 글자에 맞춰 늘어나게 한다.
+  unclipNotices() {
+    const boxes = document.querySelectorAll('div[style*="dashed"]');
+    for (let i = 0; i < boxes.length; i++) {
+      const el = boxes[i];
+      const css = el.getAttribute('style') || '';
+      if (!/height:\s*(46|56)px/.test(css) || el.dataset.hrUnclipped) continue;
+      el.dataset.hrUnclipped = '1';
+      el.style.height = 'auto';
+      el.style.minHeight = '46px';
+      el.style.padding = '10px 14px';
+      el.style.lineHeight = '1.5';
+      el.style.wordBreak = 'keep-all';   // 한국어는 단어 중간에서 끊지 않는다
+    }
+  },
+
   // '청강 (발송 보류)' 머리와 그 아래 줄을 통째로 감춘다.
   // 마크업이 늘 그리는 자리라 상태로는 없앨 수 없고, DOM 에서 지워야 한다.
   hideEmptyAudit(none) {
@@ -998,8 +1053,18 @@ Object.assign(Component.prototype, {
       document.body.appendChild(b);
     }
 
-    // 만들어진 리포트로 가는 문. 새로 고치면 화면 상태는 날아가지만
-    // 리포트는 서버에 남아 있다 — 그걸 찾아갈 길이 화면 안에만 있으면 안 된다.
+    // 오른쪽 위 단추 둘 — 어느 화면에서나 보인다.
+    // 사이드바의 로그아웃은 홈·구성원 화면에만 있어서, 업로드나 검수 중에는
+    // 빠져나갈 길이 없었다.
+    const PILL = (right) => [
+      'position:fixed', 'right:' + right + 'px', 'top:14px', 'z-index:9000',
+      'height:30px', 'padding:0 14px', 'font-size:12.5px', 'font-family:inherit',
+      'line-height:30px', 'border-radius:999px', 'text-decoration:none',
+      'border:1px solid rgba(0,0,0,.14)', 'background:rgba(255,255,255,.92)',
+      'color:#3a3a3a', 'cursor:pointer', 'backdrop-filter:blur(6px)',
+      'box-shadow:0 1px 4px rgba(0,0,0,.10)',
+    ].join(';');
+
     if (!document.getElementById('hr-list')) {
       const a = document.createElement('a');
       a.id = 'hr-list';
@@ -1007,15 +1072,18 @@ Object.assign(Component.prototype, {
       a.target = '_blank';
       a.textContent = '만들어진 리포트 ↗';
       a.title = '새로 고쳐도 남아 있는 목록';
-      a.setAttribute('style', [
-        'position:fixed', 'right:16px', 'top:14px', 'z-index:9000',
-        'height:30px', 'padding:0 14px', 'font-size:12.5px',
-        'line-height:30px', 'border-radius:999px', 'text-decoration:none',
-        'border:1px solid rgba(0,0,0,.14)', 'background:rgba(255,255,255,.92)',
-        'color:#3a3a3a', 'backdrop-filter:blur(6px)',
-        'box-shadow:0 1px 4px rgba(0,0,0,.10)',
-      ].join(';'));
+      a.setAttribute('style', PILL(122));
       document.body.appendChild(a);
+    }
+    if (!document.getElementById('hr-logout')) {
+      const b2 = document.createElement('button');
+      b2.id = 'hr-logout';
+      b2.type = 'button';
+      b2.textContent = '로그아웃';
+      b2.title = '처음 화면(담당자 / 구성원 선택)으로';
+      b2.setAttribute('style', PILL(16));
+      b2.onclick = () => this.logoutToLanding();
+      document.body.appendChild(b2);
     }
     // 첫 화면에서는 숨긴다 — 돌아갈 곳이 앱 바깥밖에 없다
     const home = this.state.view === 'landing';
@@ -1101,6 +1169,7 @@ Component.prototype._syncReport = function () {
   // 구성원으로 들어오면 그 사번의 리포트를 불러온다
   if (s.view === 'member' || s.view === 'member-report') {
     this.loadMyReports(s.employeeId || s.memberEmpId);
+    this.unclipNotices();
   }
 
   if (s.view === 'admin' && s.subTab === 'insight') {
@@ -1149,6 +1218,9 @@ Component.prototype.renderVals = function () {
   props.generateReport = () => this.realGenerate();
   props.startSend = () => this.realSend();
   props.testSend = () => this.realTestSend();
+  // 사이드바에 이미 있는 로그아웃도 같은 동작으로 맞춘다 — 두 개가 다르게
+  // 동작하면 어느 쪽을 눌렀는지에 따라 남는 것이 달라진다.
+  props.goLanding = () => this.logoutToLanding();
 
   // 문장이 만들어지는 중에는 승인·발송으로 넘어가지 못하게 한다.
   // 검수는 보고 나서 하는 일이고, 발송은 되돌릴 수 없다.
