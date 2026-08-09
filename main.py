@@ -87,9 +87,16 @@ def health():
 
     그래서 여기에는 자료를 담지 않는다. 켜져 있는가, 어떤 모드인가까지만.
     """
+    # 메일이 보낼 수 있는 상태인지도 여기서 본다. 나머지는 전부 로그인 뒤라,
+    # 설정이 들어갔는지 확인하려면 매번 사람이 로그인해서 열어 봐야 했다.
+    # 주소·계정은 담지 않는다 — 로그인 없이 열리는 곳이다.
+    import mailer
+    ms = mailer.status()
     return {"status": "ok", "auto_approve": AUTO_APPROVE,
             "generation": MODEL if USE_LLM else "mock",
             "auth": "on" if auth.enabled() else "local-only",
+            "mail": {"enabled": ms["enabled"], "ready": ms["ready"],
+                     "note": ms["note"], "host": ms["host"]},
             # 화면 지문. 브라우저에서 본 것과 다르면 예전 판을 보고 있는 것이다.
             "web": web_build()}
 
