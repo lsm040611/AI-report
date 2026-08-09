@@ -226,16 +226,21 @@ def _mock_r11(payload: dict) -> Dict[str, object]:
         return _mock_r11_listed(items, payload.get("role"))
 
     # 목 모드는 뜻을 이해하지 못하므로 '무엇을 하라'까지는 쓰지 않는다.
-    # 주제어와 인원수만 담백하게 적는다 — 없는 판단을 지어내지 않기 위해서다.
+    # 주제어만 담백하게 적는다 — 없는 판단을 지어내지 않기 위해서다.
+    #
+    # **인원수는 쓰지 않는다.** 응답자가 셋인데 "3명이 공통으로 언급"이라고
+    # 적으면 전원이 그렇게 말했다는 뜻이 되어, 리더가 누구를 떠올리든 맞게
+    # 된다. 나열 경로는 이미 같은 이유로 숫자를 뺐는데 이쪽만 남아 있었다.
+    # 숫자는 근거에만 남긴다 — 그건 검수용이고 리포트에 실리지 않는다.
     role = payload.get("role")
-    frame = ("<b>{w}</b> 부분이 강점으로 {n}명의 응답에서 공통으로 언급됨."
+    frame = ("<b>{w}</b> 부분이 강점으로 여러 응답에서 공통으로 언급됨."
              if role == "strength" else
-             "<b>{w}</b> 부분에 대한 보완 요청이 {n}명의 응답에서 공통으로 언급됨.")
+             "<b>{w}</b> 부분에 대한 보완 요청이 여러 응답에서 공통으로 언급됨.")
 
     lines, evidence = [], []
     for t in picked:
         word, n = t["word"], t["docs"]
-        lines.append(frame.format(w=word, n=n))
+        lines.append(frame.format(w=word))
         quote = next((s for s in items if word in s), items[0])
         evidence.append({"quote": quote, "why": f"{n}명이 공통으로 언급한 주제"})
     return {"text": "\n".join(lines), "evidence": evidence}
@@ -249,12 +254,44 @@ def _mock_r11_listed(items: List[str], role: str = None) -> Dict[str, object]:
     적지 않는다 — 응답 수가 적을 때 그 숫자 자체가 사람을 좁힌다.
     """
     lines = anonymous_lines(items, limit=5)
-    if not lines:
-        return {"text": "", "evidence": [], "error": "쓸 수 있는 응답이 없습니다"}
+    kept, dropped = [], 0
+    for s in lines:
+        line = polish(s)
+        # 단서를 걷어내도 문장 자체가 남으면 누가 썼는지 짚인다. 응답자가
+        # 서넛뿐인 진단에서는 한 문장이 곧 한 사람이다. 원문과 길게 겹치는
+        # 줄은 버린다 — 목 모드는 바꿔 쓸 능력이 없으니, 못 바꿀 바에는
+        # 싣지 않는 편이 낫다.
+        if _too_close(line, items):
+            dropped += 1
+            continue
+        kept.append((line, s))
+
+    if not kept:
+        return {"text": "", "evidence": [],
+                "error": ("목 모드에서는 응답을 바꿔 쓸 수 없어 실을 수 없습니다 — "
+                          "그대로 실으면 작성자가 드러납니다"
+                          if dropped else "쓸 수 있는 응답이 없습니다")}
     return {
-        "text": "\n".join(polish(s) for s in lines),
-        "evidence": [{"quote": s, "why": "응답 원문(단서 소거 후)"} for s in lines],
+        "text": "\n".join(line for line, _ in kept),
+        "evidence": [{"quote": s, "why": "응답 원문(단서 소거 후)"} for _, s in kept],
     }
+
+
+# 이보다 길게 겹치면 '바꿔 쓴 것'이 아니라 '옮긴 것'이다.
+VERBATIM_RUN = 12
+
+
+def _too_close(line: str, sources: List[str]) -> bool:
+    """만든 문장이 원문과 길게 이어 붙어 겹치는가."""
+    a = re.sub(r"[\s<>/b.,!?~·\"'“”‘’]", "", line or "")
+    if len(a) < VERBATIM_RUN:
+        return False
+    for src in sources:
+        b = re.sub(r"[\s<>/b.,!?~·\"'“”‘’]", "", src or "")
+        for i in range(len(a) - VERBATIM_RUN + 1):
+            if a[i:i + VERBATIM_RUN] in b:
+                return True
+    return False
 
 
 def _mock_r17(payload: dict) -> Dict[str, object]:
