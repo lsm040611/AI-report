@@ -17,7 +17,7 @@ import auth
 from config import AUTO_APPROVE, MODEL, USE_LLM, mode_banner
 from database import Base, engine, ensure_columns
 from routers import (cards, dashboard, handoff, insights, reports,
-                     roster, uploads)
+                     roster, uploads, usage)
 
 Base.metadata.create_all(bind=engine)
 ensure_columns()          # 이미 있는 표에 새로 생긴 열을 맞춰 준다
@@ -39,6 +39,7 @@ app.include_router(handoff.router)
 app.include_router(reports.router)
 app.include_router(insights.router)
 app.include_router(roster.router)
+app.include_router(usage.router)
 app.include_router(dashboard.router)
 
 
@@ -279,14 +280,19 @@ a{color:#DA1B33;font-weight:700;text-decoration:none}
 .no{color:#6E655C;font-weight:400}
 .empty{background:#FBF5E4;border:1px dashed #E2D7C0;border-radius:6px;
        padding:26px;text-align:center;color:#6E655C;font-size:13.5px}
+.fname{font-size:12.5px;font-weight:700;color:#4A423A;margin:14px 0 2px;
+       background:#FBF5E4;border-radius:4px;padding:6px 10px}
+.fname span{font-weight:400;color:#6E655C;margin-left:6px}
 </style></head><body><div class=s>
 <h1>만들어진 리포트</h1>
 <p class=m>화면을 새로 고쳐도 여기는 그대로입니다. 링크를 열면 리포트가 뜨고,
-브라우저에서 <b>Ctrl+P → PDF로 저장</b> 하면 파일로 받을 수 있습니다.</p>
+브라우저에서 <b>Ctrl+P → PDF로 저장</b> 하면 파일로 받을 수 있습니다.<br>
+<b>문장</b> 칸이 <b>AI</b> 면 말투 정제·번역·익명화가 적용된 문장이고,
+<b>목</b> 이면 API 호출이 실패해 정제되지 않은 것입니다.</p>
 __BODY__
 <p style="font-size:12.5px;color:#6E655C;margin-top:26px">
-<a href="/">← 처음으로</a> · <a href="/roster/setup">사원 명부</a> ·
-<a href="/simple">간단 업로드</a></p>
+<a href="/">← 처음으로</a> · <a href="/usage/page">API 사용 현황</a> ·
+<a href="/roster/setup">사원 명부</a> · <a href="/simple">간단 업로드</a></p>
 </div></body></html>"""
 
 
@@ -319,22 +325,43 @@ def report_list():
             parts = []
             for title, rows in groups.items():
                 made = sum(1 for c in rows if c.report)
-                trs = []
+                # 과정 안에서 다시 파일별로 묶는다. 여러 개를 함께 올리면
+                # 한 줄로 이어져 어느 파일 사람인지 알 수 없다.
+                byfile: dict = {}
                 for c in rows:
-                    ok, why = is_sendable(c.card_json)
-                    link = (f'<a href="/reports/{c.report.id}/html" '
-                            f'target=_blank>리포트 열기 ↗</a>'
-                            if c.report else '<span class=no>아직 없음</span>')
-                    send = ("보낼 수 있음" if ok
-                            else f'<span class=no>{_esc(why)}</span>')
-                    trs.append(f"<tr><td>{_esc(c.person_name)}</td>"
-                               f"<td>{_esc(c.person_id or '')}</td>"
-                               f"<td>{_esc(c.round_label or '')}</td>"
-                               f"<td>{link}</td><td>{send}</td></tr>")
+                    byfile.setdefault(c.source_file or "파일 미상", []).append(c)
+
+                blocks = []
+                for fname, group in byfile.items():
+                    trs = []
+                    for c in group:
+                        ok, why = is_sendable(c.card_json)
+                        link = (f'<a href="/reports/{c.report.id}/html" '
+                                f'target=_blank>리포트 열기 ↗</a>'
+                                if c.report else '<span class=no>아직 없음</span>')
+                        send = ("보낼 수 있음" if ok
+                                else f'<span class=no>{_esc(why)}</span>')
+                        gen = c.card_json.get("generated") or []
+                        mock = sum(1 for g in gen if g.get("engine") == "mock")
+                        made_by = ("—" if not gen else
+                                   ("AI" if not mock else
+                                    f'<span class=no>목 {mock}/{len(gen)}</span>'))
+                        trs.append(f"<tr><td>{_esc(c.person_name)}</td>"
+                                   f"<td>{_esc(c.person_id or '')}</td>"
+                                   f"<td>{_esc(c.round_label or '')}</td>"
+                                   f"<td>{made_by}</td>"
+                                   f"<td>{link}</td><td>{send}</td></tr>")
+                    head = (f'<div class=fname>{_esc(fname)} '
+                            f'<span>{len(group)}명</span></div>'
+                            if len(byfile) > 1 else "")
+                    blocks.append(
+                        head + f"<table><tr><th>이름</th><th>사번</th>"
+                        f"<th>차수</th><th>문장</th><th>리포트</th>"
+                        f"<th>발송</th></tr>{''.join(trs)}</table>")
+
                 parts.append(
                     f"<h2>{_esc(title)}<span>{made}/{len(rows)}편</span></h2>"
-                    f"<table><tr><th>이름</th><th>사번</th><th>차수</th>"
-                    f"<th>리포트</th><th>발송</th></tr>{''.join(trs)}</table>")
+                    + "".join(blocks))
             body = "".join(parts)
         return HTMLResponse(LIST_PAGE.replace("__BODY__", body), headers=NO_CACHE)
     finally:

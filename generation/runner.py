@@ -157,6 +157,9 @@ def _accept(db: Session, h: Handoff, card: Card, result: dict, operator: str) ->
         "text": result.get("text", ""),
         "evidence": result.get("evidence", []),
         "engine": result.get("engine"),
+        # API 호출이 실패하면 목으로 조용히 떨어진다. 왜 떨어졌는지 남기지
+        # 않으면, 정제·번역이 안 된 문장이 나가는데도 아무도 모른다.
+        "error": result.get("error"),
         "accepted_by": operator,
         # 작업마다 딸려 오는 추가 필드(암기 문장의 parts·closing 등)를 잃지 않는다
         "extra": {k: v for k, v in result.items()

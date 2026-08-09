@@ -10,6 +10,7 @@ Claude API 를 호출한 뒤 결과를 R-16 검사로 되돌려 보낸다.
 from __future__ import annotations
 
 import json
+import time
 import re
 from typing import Dict, List, Optional
 
@@ -33,7 +34,9 @@ def _client_or_none():
         return None
     if _client is None:
         import anthropic                      # 키가 있을 때만 import 비용을 낸다
-        _client = anthropic.Anthropic()
+        # 잠깐 끊기는 것 때문에 문장이 목으로 떨어지면, 정제도 번역도 익명화도
+        # 안 된 문장이 리포트에 실린다. 실패를 조용히 받아들이는 대신 더 버틴다.
+        _client = anthropic.Anthropic(max_retries=5, timeout=120.0)
     return _client
 
 
@@ -52,7 +55,7 @@ def generate(rule_id: str, task: str, payload: dict) -> Dict[str, object]:
         return {**_mock(rule_id, task, payload), "engine": "mock", "task_label": label}
 
     try:
-        data = _call(client, user_prompt, schema)
+        data = _with_retry(client, user_prompt, schema)
     except Exception as exc:                   # noqa: BLE001 — 어떤 실패든 목으로 내려간다
         out = _mock(rule_id, task, payload)
         return {**out, "engine": "mock",
@@ -70,6 +73,36 @@ def generate(rule_id: str, task: str, payload: dict) -> Dict[str, object]:
             "evidence": data.get("evidence", []),
             "engine": engine_name(),
             "task_label": label}
+
+
+# 잠깐 끊기는 것들. 이건 "모델이 못 하겠다"가 아니라 "지금 길이 막혔다"이므로
+# 다시 물어보면 된다. 목으로 떨어뜨리면 정제 안 된 문장이 리포트에 실린다.
+TRANSIENT = ("APIConnectionError", "APITimeoutError", "RateLimitError",
+             "InternalServerError", "APIStatusError", "ConnectionError",
+             "ReadTimeout", "RemoteProtocolError")
+RETRY_WAITS = (1.0, 3.0, 7.0)      # 마지막 시도까지 최대 11초를 더 기다린다
+
+
+def _with_retry(client, user_prompt: str, schema: dict) -> Optional[dict]:
+    """끊긴 것 때문에 문장을 잃지 않는다.
+
+    SDK 도 자체 재시도를 하지만, 네 건을 겹쳐 부르는 동안 연결이 흔들리면
+    그것만으로는 모자랐다 — 36건 중 9건이 APIConnectionError 로 목이 됐고,
+    그 문장들은 익명화가 안 돼 응답자 수까지 드러났다.
+    """
+    last = None
+    for i, wait in enumerate((0.0,) + RETRY_WAITS):
+        if wait:
+            time.sleep(wait)
+        try:
+            return _call(client, user_prompt, schema)
+        except Exception as exc:               # noqa: BLE001
+            name = type(exc).__name__
+            if name not in TRANSIENT:
+                raise                          # 거절·잘못된 요청은 다시 물어도 같다
+            last = exc
+            print(f"[생성] {name} — {i + 1}번째 실패, 다시 시도합니다")
+    raise last
 
 
 # 거절 시 서버가 대체 모델로 재시도해 주는 기능. 쓸 수 있는 모델이 정해져 있어서,
