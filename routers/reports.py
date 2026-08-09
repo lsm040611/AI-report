@@ -389,6 +389,23 @@ def _send_all(db: Session, upload_id: int, on_progress=None) -> dict:
     if not cards:
         raise HTTPException(404, "업로드 없음")
 
+    # 메일 서버에 닿는지 **한 번만** 먼저 본다.
+    # 길이 막혀 있으면 사람마다 연결을 시도하다 하나씩 시간 초과가 난다 —
+    # 열 명이면 몇 분을 기다린 끝에 알아들을 수 없는 오류 열 줄이 남는다.
+    # 막힌 것은 한 번 확인하면 아는 사실이고, 그때는 안 보냈다고 말하면 된다.
+    gate = mailer.check()
+    if not gate["ok"]:
+        why = f'{gate["reason"]} — {gate.get("hint") or ""}'.strip(" —")
+        out = []
+        for i, card in enumerate(cards, start=1):
+            person = card.card_json.get("person") or {}
+            out.append({"person": person.get("name"), "to": person.get("email"),
+                        "sent": False, "dry_run": True, "reason": why})
+            if on_progress:
+                on_progress(i, len(cards))
+        return {"upload_id": upload_id, "sent": 0, "total": len(out),
+                "blocked": why, "mail": mailer.status(), "results": out}
+
     results = []
     for i, card in enumerate(cards, start=1):
         report = db.query(Report).filter(Report.card_id == card.id).one_or_none()

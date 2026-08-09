@@ -527,10 +527,16 @@ Object.assign(Component.prototype, {
         failed: !x.sent, dryRun: !!x.dry_run, reason: x.reason || '',
       }));
       this.setState({ sendStage: 'tracking', sendRows: rows, sendDryRun: dry });
-      this.showToast(dry
-        ? '미리보기 — ' + (st.mail && st.mail.note || '') + ' (실제로 보내지 않았습니다)'
-        : st.sent + '/' + st.total + '명에게 보냈습니다'
-          + (st.etaText ? ' · ' + st.etaText : ''));
+      if (st.blocked) {
+        // 길이 막혀 한 통도 못 보낸 경우. 사람마다 실패한 것이 아니라
+        // 애초에 나갈 수 없었던 것이므로 그렇게 말해 준다.
+        this.showToast('한 통도 보내지 못했습니다 — ' + st.blocked);
+      } else {
+        this.showToast(dry
+          ? '미리보기 — ' + (st.mail && st.mail.note || '') + ' (실제로 보내지 않았습니다)'
+          : st.sent + '/' + st.total + '명에게 보냈습니다'
+            + (st.etaText ? ' · ' + st.etaText : ''));
+      }
     };
     setTimeout(tick, 800);
   },
