@@ -496,10 +496,17 @@ Object.assign(Component.prototype, {
         });
       });
 
+      // 화면에는 '강지우 대리' 로 뜬다. 사내 문서에서 이름만 부르면 어색하다.
+      const who = d.person || {};
+      const shown = who.name
+        ? (who.position ? who.name + ' ' + who.position : who.name)
+        : this.state.memberName;
       this.setState({
         memberExtraCourses: courses,
         memberReportByCourse: byCourse,
-        memberName: (d.person && d.person.name) || this.state.memberName,
+        memberName: shown,
+        memberPosition: who.position || '',
+        memberTeam: who.team || '',
         memberEmpId: key,
       });
       if (!courses.length) {

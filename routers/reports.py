@@ -274,13 +274,18 @@ def my_reports(empId: Optional[str] = None, name: Optional[str] = None,
     if sentOnly:
         cards = [c for c in cards if c.report.sent_at]
 
+    from models import RosterEntry
     who = None
     if cards:
-        who = {"name": cards[0].person_name, "empId": cards[0].person_id}
-    elif empId:
-        from models import RosterEntry
+        p = cards[0].card_json.get("person") or {}
+        who = {"name": cards[0].person_name, "empId": cards[0].person_id,
+               "position": p.get("position"),
+               "team": p.get("팀") or p.get("부서")}
+    if (not who or not who.get("position")) and empId:
         r = db.query(RosterEntry).filter(RosterEntry.person_id == empId).first()
-        who = {"name": r.name, "empId": r.person_id} if r else None
+        if r:
+            who = {"name": r.name, "empId": r.person_id,
+                   "position": r.position, "team": r.team or r.department}
 
     titles = {c.course_id: c for c in db.query(Course).all()}
     groups: Dict[str, dict] = {}

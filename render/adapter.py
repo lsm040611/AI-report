@@ -130,7 +130,9 @@ def to_presentation_card(card: dict,
                      "생성 API 연결 시 실제 생성물로 대체됩니다.")
 
     return {
-        "person": {"name": person.get("name"), "alias": person.get("alias")},
+        "person": {"name": person.get("name"), "alias": person.get("alias"),
+                   "position": person.get("position"),
+                   "team": person.get("팀") or person.get("부서")},
         "meta": {
             "eyebrow": EYEBROW.get(stype, "개인 피드백 리포트"),
             "program": _program(context),

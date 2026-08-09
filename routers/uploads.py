@@ -691,7 +691,8 @@ def _roster(db: Session) -> dict:
     return {
         "people": [{"person_id": r.person_id, "name": r.name, "alias": r.alias,
                     "email": r.email if r.dispatchable else None,
-                    "status": r.status, "부서": r.department, "팀": r.team}
+                    "status": r.status, "position": r.position,
+                    "부서": r.department, "팀": r.team}
                    for r in db.query(RosterEntry).all()],
         "resolved": {r.memo_key: r.person_id
                      for r in db.query(PersonResolution).all()},

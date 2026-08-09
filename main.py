@@ -346,7 +346,9 @@ def report_list():
                         made_by = ("—" if not gen else
                                    ("AI" if not mock else
                                     f'<span class=no>목 {mock}/{len(gen)}</span>'))
+                        who = c.card_json.get("person") or {}
                         trs.append(f"<tr><td>{_esc(c.person_name)}</td>"
+                                   f"<td>{_esc(who.get('position') or '')}</td>"
                                    f"<td>{_esc(c.person_id or '')}</td>"
                                    f"<td>{_esc(c.round_label or '')}</td>"
                                    f"<td>{made_by}</td>"
@@ -355,9 +357,9 @@ def report_list():
                             f'<span>{len(group)}명</span></div>'
                             if len(byfile) > 1 else "")
                     blocks.append(
-                        head + f"<table><tr><th>이름</th><th>사번</th>"
-                        f"<th>차수</th><th>문장</th><th>리포트</th>"
-                        f"<th>발송</th></tr>{''.join(trs)}</table>")
+                        head + f"<table><tr><th>이름</th><th>직급</th>"
+                        f"<th>사번</th><th>차수</th><th>문장</th>"
+                        f"<th>리포트</th><th>발송</th></tr>{''.join(trs)}</table>")
 
                 parts.append(
                     f"<h2>{_esc(title)}<span>{made}/{len(rows)}편</span></h2>"

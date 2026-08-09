@@ -54,6 +54,7 @@ body{font-family:var(--sans);background:var(--page);color:var(--ink);
 .masthead h1{font-size:42px;font-weight:800;letter-spacing:-.035em;margin:14px 0 6px;
   line-height:1.1;color:var(--ink)}
 .masthead h1 .alias{font-size:19px;font-weight:500;color:var(--faint);margin-left:11px;letter-spacing:0}
+.masthead .where{font-size:13.5px;color:var(--muted);margin:0 0 4px}
 .masthead .prog{font-size:16.5px;font-weight:600;color:var(--ink-2)}
 .metastrip{background:var(--paper);border-top:1px solid var(--line);
   border-bottom:1px solid var(--line);padding:13px 46px;display:flex;flex-wrap:wrap;gap:6px 0}
@@ -853,11 +854,20 @@ def render_masthead(card: dict) -> str:
 
     eyebrow = f'<div class="eyebrow">{esc(m["eyebrow"])}</div>' if m.get("eyebrow") else ""
     alias = f'<span class="alias">{esc(p["alias"])}</span>' if p.get("alias") else ""
-    honorific = "" if p.get("honorific") is False else " 님"
     prog = f'<div class="prog">{esc(m["program"])}</div>' if m.get("program") else ""
 
+    # 직급이 있으면 '강지우 대리님', 없으면 '강지우 님'.
+    # 직급을 아는데도 이름만 부르면 사내 문서에서는 어색하다.
+    if p.get("honorific") is False:
+        title = esc(p.get("name"))
+    elif p.get("position"):
+        title = f'{esc(p.get("name"))} {esc(p["position"])}님'
+    else:
+        title = f'{esc(p.get("name"))} 님'
+
+    where = f'<div class="where">{esc(p["team"])}</div>' if p.get("team") else ""
     return (f'<div class="masthead">{eyebrow}'
-            f'<h1>{esc(p.get("name"))}{honorific}{alias}</h1>{prog}</div>{strip}')
+            f'<h1>{title}{alias}</h1>{where}{prog}</div>{strip}')
 
 
 def render_footer(f) -> str:

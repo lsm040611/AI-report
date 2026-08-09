@@ -172,6 +172,11 @@ def _adopt(card: dict, person: dict, entry: dict) -> None:
     person["person_id"] = entry.get("person_id")
     if entry.get("email") and not person.get("email"):
         person["email"] = entry["email"]
+    # 직급·소속은 평가지에 없다. 리포트 머리에 "강지우 대리님" 이라고 부르려면
+    # 명부에서 가져와야 한다. 평가지에 적혀 있으면 그쪽을 그대로 둔다.
+    for key in ("position", "부서", "팀"):
+        if entry.get(key) and not person.get(key):
+            person[key] = entry[key]
     status = entry.get("status")
     if status and status != "active":
         add_flag(card, "not_active_employee", NOTICE,
