@@ -124,8 +124,25 @@ def health():
             "auth": "on" if auth.enabled() else "local-only",
             "mail": {"enabled": ms["enabled"], "ready": ms["ready"],
                      "note": ms["note"], "host": ms["host"]},
+            # 명부가 몇 명인지. 0 이거나 예상보다 적으면 사번·직급이 안 붙고
+            # 리포트가 통째로 '보류' 로 떨어진다 — 가장 먼저 볼 숫자다.
+            "roster": _roster_count(),
             # 화면 지문. 브라우저에서 본 것과 다르면 예전 판을 보고 있는 것이다.
             "web": web_build()}
+
+
+def _roster_count() -> int:
+    """명부 인원. 세다가 실패해도 /health 는 떠야 하므로 -1 로 갈음한다."""
+    try:
+        from database import SessionLocal
+        from models import RosterEntry
+        db = SessionLocal()
+        try:
+            return db.query(RosterEntry).count()
+        finally:
+            db.close()
+    except Exception:                                          # noqa: BLE001
+        return -1
 
 
 # --------------------------------------------------------------------------
@@ -295,38 +312,76 @@ def index():
     return HTMLResponse(INDEX.replace("__MODE__", mode_banner()), headers=NO_CACHE)
 
 
+# 화면·리포트와 같은 서체. 없으면 시스템 서체로 떨어질 뿐이다.
+WEBFONT = ("https://cdn.jsdelivr.net/gh/wanteddev/wanted-sans@v1.0.3"
+           "/packages/wanted-sans/fonts/webfonts/variable/complete"
+           "/WantedSansVariable.min.css")
+
 LIST_PAGE = """<!doctype html><html lang=ko><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>만들어진 리포트</title><style>
-body{font-family:'Malgun Gothic',sans-serif;background:#F0E8D6;color:#231D18;
-     margin:0;padding:36px 16px 80px;line-height:1.7}
-.s{max-width:820px;margin:0 auto;background:#fff;border:1px solid #E2D7C0;
-   border-top:6px solid #DA1B33;border-radius:3px;padding:30px 34px}
-h1{font-size:23px;margin:0 0 4px}
-p.m{color:#6E655C;font-size:13px;margin:0 0 20px}
-h2{font-size:15px;margin:26px 0 8px;padding-top:16px;border-top:1px solid #EFE8D9}
-h2:first-of-type{border-top:0;padding-top:0}
-h2 span{font-weight:400;font-size:12.5px;color:#6E655C;margin-left:8px}
-table{border-collapse:collapse;width:100%;font-size:13.5px}
-td,th{border-bottom:1px solid #EFE8D9;padding:9px 6px;text-align:left}
-th{font-size:11.5px;color:#6E655C;font-weight:600}
-a{color:#DA1B33;font-weight:700;text-decoration:none}
-.no{color:#6E655C;font-weight:400}
-.empty{background:#FBF5E4;border:1px dashed #E2D7C0;border-radius:6px;
-       padding:26px;text-align:center;color:#6E655C;font-size:13.5px}
-.fname{font-size:12.5px;font-weight:700;color:#4A423A;margin:14px 0 2px;
-       background:#FBF5E4;border-radius:4px;padding:6px 10px}
-.fname span{font-weight:400;color:#6E655C;margin-left:6px}
+<title>만들어진 리포트</title>
+<link rel="stylesheet" href="__FONT__"><style>
+/* 화면(프로토타입)과 같은 서체·색·모서리. 리포트만 따로 놀지 않게. */
+:root{--red:#EA002C;--ink:#1B1B1D;--ink2:#48484D;--muted:#78787E;
+      --line:#E4E4E7;--line2:#F0F0F2;--pearl:#FAFAFC;--page:#F5F5F7;
+      --ok:#1C8A53;--radius:14px}
+*{box-sizing:border-box}
+body{font-family:'Wanted Sans','Noto Sans KR','Malgun Gothic',sans-serif;
+     background:var(--page);color:var(--ink);margin:0;
+     padding:40px 16px 90px;line-height:1.65;-webkit-font-smoothing:antialiased}
+.s{max-width:860px;margin:0 auto;background:#fff;border:1px solid var(--line);
+   border-radius:var(--radius);padding:34px 38px;
+   box-shadow:0 1px 3px rgba(0,0,0,.04),0 8px 28px rgba(0,0,0,.05)}
+.eyebrow{display:inline-block;font-size:11.5px;font-weight:700;
+   letter-spacing:.06em;color:var(--red);background:#FDE9ED;
+   padding:4px 12px;border-radius:999px;margin-bottom:12px}
+h1{font-size:26px;font-weight:700;letter-spacing:-.02em;margin:0 0 6px}
+p.m{color:var(--muted);font-size:13px;margin:0 0 26px;line-height:1.7}
+h2{font-size:16px;font-weight:700;margin:30px 0 10px;padding-top:22px;
+   border-top:1px solid var(--line2);letter-spacing:-.01em}
+h2:first-of-type{border-top:0;padding-top:0;margin-top:0}
+h2 span{font-weight:400;font-size:12.5px;color:var(--muted);margin-left:8px}
+table{border-collapse:separate;border-spacing:0;width:100%;font-size:13.5px;
+      background:#fff;border:1px solid var(--line);border-radius:11px;
+      overflow:hidden;margin-bottom:6px}
+th{font-size:11.5px;color:var(--muted);font-weight:600;background:var(--pearl);
+   text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}
+td{padding:11px 12px;border-bottom:1px solid var(--line2);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:var(--pearl)}
+a{color:var(--red);font-weight:600;text-decoration:none}
+a:hover{text-decoration:underline}
+.no{color:var(--muted);font-weight:400}
+.ai{display:inline-block;font-size:11px;font-weight:700;color:var(--ok);
+    background:#E8F4EE;border-radius:999px;padding:2px 9px}
+.empty{background:var(--pearl);border:1px dashed var(--line);
+       border-radius:11px;padding:34px;text-align:center;
+       color:var(--muted);font-size:13.5px}
+.fname{font-size:12px;font-weight:600;color:var(--ink2);margin:16px 0 6px;
+       background:var(--pearl);border:1px solid var(--line);
+       border-radius:8px;padding:7px 12px;display:inline-block}
+.fname span{font-weight:400;color:var(--muted);margin-left:6px}
+.bar{font-size:13px;border-radius:10px;padding:11px 14px;margin:0 0 22px;
+     border:1px solid var(--line);background:var(--pearl);color:var(--ink2)}
+.bar a{margin-left:4px}
+.bar.ok{background:#F1F8F4;border-color:#CBE5D8;color:#14663D}
+.bar.warn{background:#FFF6EE;border-color:#F6DCC4;color:#8A4A12}
+.bar.bad{background:#FDECEF;border-color:#F7C9D2;color:#A80020}
+.foot{font-size:12.5px;color:var(--muted);margin-top:30px;
+      padding-top:18px;border-top:1px solid var(--line2)}
+.foot a{margin-right:14px}
+@media(max-width:640px){.s{padding:24px 18px}th,td{padding:9px 8px}}
 </style></head><body><div class=s>
+<div class=eyebrow>HR 리포트 엔진</div>
 <h1>만들어진 리포트</h1>
 <p class=m>화면을 새로 고쳐도 여기는 그대로입니다. 링크를 열면 리포트가 뜨고,
 브라우저에서 <b>Ctrl+P → PDF로 저장</b> 하면 파일로 받을 수 있습니다.<br>
 <b>문장</b> 칸이 <b>AI</b> 면 말투 정제·번역·익명화가 적용된 문장이고,
-<b>목</b> 이면 API 호출이 실패해 정제되지 않은 것입니다.</p>
+<b>목</b> 이면 정제되지 않은 문장입니다.</p>
 __BODY__
-<p style="font-size:12.5px;color:#6E655C;margin-top:26px">
-<a href="/">← 처음으로</a> · <a href="/usage/page">API 사용 현황</a> ·
-<a href="/roster/setup">사원 명부</a> · <a href="/simple">간단 업로드</a></p>
+<div class=foot>
+<a href="/">← 처음으로</a><a href="/usage/page">API 사용 현황</a>
+<a href="/roster/setup">사원 명부</a><a href="/simple">간단 업로드</a></div>
 </div></body></html>"""
 
 
@@ -378,7 +433,7 @@ def report_list():
                         gen = c.card_json.get("generated") or []
                         mock = sum(1 for g in gen if g.get("engine") == "mock")
                         made_by = ("—" if not gen else
-                                   ("AI" if not mock else
+                                   ('<span class=ai>AI</span>' if not mock else
                                     f'<span class=no>목 {mock}/{len(gen)}</span>'))
                         who = c.card_json.get("person") or {}
                         trs.append(f"<tr><td>{_esc(c.person_name)}</td>"
@@ -399,7 +454,25 @@ def report_list():
                     f"<h2>{_esc(title)}<span>{made}/{len(rows)}편</span></h2>"
                     + "".join(blocks))
             body = "".join(parts)
-        return HTMLResponse(LIST_PAGE.replace("__BODY__", body), headers=NO_CACHE)
+
+        # 사번·직급이 비고 발송이 막히는 사고는 거의 다 명부 문제다.
+        # 표 위에 인원수를 한 줄 띄워서, 사람이 표를 뜯어보기 전에 알게 한다.
+        n = _roster_count()
+        blanks = sum(1 for c in cards if not c.person_id)
+        if n <= 0:
+            body = ('<div class="bar bad">사원 명부가 비어 있습니다 — 사번·직급이 '
+                    '붙지 않고 발송도 막힙니다. '
+                    '<a href="/roster/setup">명부 넣기 →</a></div>') + body
+        elif blanks:
+            body = (f'<div class="bar warn">명부 {n}명 · 이 중 <b>{blanks}명</b>은 '
+                    f'명부에서 못 찾아 사번·직급이 비었습니다. 명부에 넣고 평가지를 '
+                    f'다시 올리면 채워집니다. '
+                    f'<a href="/roster/setup">명부 넣기 →</a></div>') + body
+        else:
+            body = f'<div class="bar ok">사원 명부 {n}명 · 전원 확인됨</div>' + body
+
+        page = LIST_PAGE.replace("__BODY__", body).replace("__FONT__", WEBFONT)
+        return HTMLResponse(page, headers=NO_CACHE)
     finally:
         db.close()
 

@@ -135,6 +135,38 @@ function toValidationRows(rows) {
 const SEVERITY_TO_STATUS = {
   hold: 'hold', review: 'review', block_direct_quote: 'summary',
 };
+
+// 플래그 코드를 사람 말로. 서버가 주는 message 가 이미 한국어지만, 코드마다
+// 'ambiguous_person' 처럼 영문이 섞여 나올 때가 있어 앞에 뜻을 붙여 준다.
+const FLAG_WHY = {
+  non_regular_participant: '청강생입니다',
+  ambiguous_person: '같은 이름이 명부에 둘 이상입니다',
+  person_not_in_roster: '명부에 없는 사람입니다',
+  anonymity_risk: '응답자가 적어 원문을 인용할 수 없습니다',
+  roster_missing: '사원 명부가 아직 없습니다',
+  no_email: '메일 주소가 없습니다',
+  not_active_employee: '재직 중이 아닙니다',
+  unmapped_competency: '표준 역량으로 짝지어지지 않은 항목이 있습니다',
+  original_average_mismatch: '원본 평균과 다시 계산한 평균이 다릅니다',
+};
+
+// 명부 때문에 생긴 보류는 담당자가 직접 고칠 수 있다. 사유만 알려 주고
+// 끝내면 "그래서 뭘 하라는 거냐" 로 남으므로, 할 일을 같이 적는다.
+const FLAG_FIX = {
+  person_not_in_roster: '사원 명부에 넣고 다시 올리시면 풀립니다 (/roster/setup)',
+  roster_missing: '사원 명부부터 넣어 주십시오 (/roster/setup)',
+  no_email: '명부의 이메일 칸을 채워 주십시오 (/roster/setup)',
+};
+
+function flagText(f) {
+  const why = FLAG_WHY[f.code];
+  const msg = (f.message || '').trim();
+  const fix = FLAG_FIX[f.code];
+  let out = (why && msg && msg.indexOf(why) < 0) ? why + ' — ' + msg
+                                                 : (why || msg || f.code);
+  if (fix) out += ' · ' + fix;
+  return out;
+}
 function toMember(c) {
   return {
     file: c.file || '',
@@ -905,19 +937,40 @@ Object.assign(Component.prototype, {
 
   // '청강 (발송 보류)' 머리와 그 아래 줄을 통째로 감춘다.
   // 마크업이 늘 그리는 자리라 상태로는 없앨 수 없고, DOM 에서 지워야 한다.
+  // 보류 안내줄의 문구를 실제 사유로 바꾼다. 마크업에 글자로 박혀 있어
+  // 상태로는 못 바꾸고 DOM 에서 갈아끼워야 한다.
+  paintHoldReason(reason) {
+    const FIXED = '보류 사유 확인 필요 — 발송 여부를 선택하세요';
+    const spans = document.querySelectorAll('span');
+    for (let i = 0; i < spans.length; i++) {
+      const el = spans[i];
+      const now = el.textContent.trim();
+      if (now !== FIXED && el.dataset.hrHold === undefined) continue;
+      if (el.dataset.hrHold === reason) return;
+      el.dataset.hrHold = reason;
+      el.textContent = reason
+        ? '보류 — ' + reason + ' · 발송 여부를 선택하세요'
+        : FIXED;
+      return;
+    }
+  },
+
   hideEmptyAudit(none) {
-    if (this._auditHidden === none) return;
-    this._auditHidden = none;
     const all = document.querySelectorAll('div');
     for (let i = 0; i < all.length; i++) {
       const n = all[i];
-      if (n.children.length === 0
-          && n.textContent.trim() === '청강 (발송 보류)') {
-        n.style.display = none ? 'none' : '';
-        const row = n.nextElementSibling;
-        if (row) row.style.display = none ? 'none' : '';
-        return;
+      if (n.children.length !== 0
+          || n.textContent.trim() !== '청강 (발송 보류)') continue;
+      n.style.display = none ? 'none' : '';
+      const row = n.nextElementSibling;
+      if (row) {
+        row.style.display = none ? 'none' : '';
+        // 감춰도 키보드(Tab)로는 닿는다. 눌리지 않게 아예 빼 둔다.
+        row.setAttribute('aria-hidden', none ? 'true' : 'false');
+        if (none) row.setAttribute('tabindex', '-1');
+        else row.setAttribute('tabindex', '0');
       }
+      return;
     }
   },
 
@@ -1269,12 +1322,39 @@ Component.prototype.renderVals = function () {
     const none = (s.auditMemberData || {}).empty;
     props.auditPendingCount = none ? 0 : props.auditPendingCount;
     props.totalTargetCount = (s.mainMembers || []).length;
-    if (none && props.auditMember) {
-      props.auditMember = { ...props.auditMember, name: '없음',
-                            empId: '', badgeLabel: '해당 없음',
-                            badgeTone: 'neutral' };
+    if (none) {
+      // 없는 사람을 고를 수는 없다. 눌러도 아무 일이 없게 하고, 골라진
+      // 상태로 넘어가지도 않게 한다 — 그러면 오른쪽에 빈 미리보기가 뜬다.
+      props.auditActive = false;
+      if (props.auditMember) {
+        props.auditMember = { ...props.auditMember, name: '없음', empId: '',
+                              badgeLabel: '해당 없음', badgeTone: 'neutral',
+                              onSelect: () => {} };
+      }
+      // 아무도 없을 때는 청강 칸이 선택된 것으로 두었었다. 사람이 있으면
+      // 그 사람을 보여 준다 — 빈 칸이 골라져 있을 이유가 없다.
+      if ((s.mainMembers || []).length && s.auditMemberData.selected) {
+        s.auditMemberData.selected = false;
+      }
     }
     this.hideEmptyAudit(none);
+
+    // 왜 보류인지 알려 준다. '보류' 라고만 하면 담당자는 승인할지 뺄지
+    // 판단할 근거가 없다. 화면의 '확인 필요' 문구도 원래는 더미였다
+    // (원본 84 ↔ 재계산 83.5) — 실제 사유로 바꾼다.
+    const sel = (s.mainMembers || [])[s.selectedIdx];
+    const mine = (s.engineFlags || []).filter(
+      (f) => sel && (f.cardId === sel.cardId || f.name === sel.rawName));
+    const holds = mine.filter((f) => f.severity === 'hold').map(flagText);
+    const reviews = mine.filter((f) => f.severity === 'review').map(flagText);
+    if (props.selected) {
+      props.selected = {
+        ...props.selected,
+        warningText: reviews.length ? reviews.join(' · ')
+                                    : props.selected.warningText,
+      };
+    }
+    this.paintHoldReason(holds.join(' · '));
   }
 
   // 고른 파일만 보여 준다. **거르는 것은 보이는 목록뿐이다** — 판단(오류가

@@ -57,8 +57,13 @@ def import_roster(file: UploadFile = File(..., description="employees.csv"),
     return load_csv(db, file.file.read(), replace=replace)
 
 
-def load_csv(db: Session, raw: bytes, replace: bool = True) -> dict:
-    """CSV 본문 → 명부. 화면 업로드와 서버 시작 시 자동 적재가 같은 길을 쓴다."""
+def load_csv(db: Session, raw: bytes, replace: bool = True,
+             keep_existing: bool = False) -> dict:
+    """CSV 본문 → 명부. 화면 업로드와 서버 시작 시 자동 적재가 같은 길을 쓴다.
+
+    keep_existing 이면 이미 있는 사번은 손대지 않는다 — 자동 적재가 사람이
+    고쳐 둔 값을 덮어쓰지 않게 하려는 것이다.
+    """
     text = _decode(raw)
     rows = list(csv.DictReader(io.StringIO(text)))
     if not rows:
@@ -91,6 +96,8 @@ def load_csv(db: Session, raw: bytes, replace: bool = True) -> dict:
 
         found = db.query(RosterEntry).filter(RosterEntry.person_id == pid).first()
         if found:
+            if keep_existing:
+                continue                     # 사람이 고쳐 둔 값을 덮지 않는다
             for k, v in vals.items():
                 setattr(found, k, v)
             updated += 1
@@ -115,27 +122,36 @@ SEED_CSV = os.path.join(
 
 
 def seed_if_empty() -> Optional[dict]:
-    """명부가 비어 있을 때만 기본 파일을 넣는다.
+    """서버가 뜰 때 기본 명부를 **모자란 만큼만** 채운다.
 
-    **비어 있을 때만** 이라는 것이 요점이다. 담당자가 화면에서 올린 명부를
-    서버가 재시작했다고 덮어써 버리면, 고쳐 둔 것이 조용히 사라진다.
+    예전에는 표가 완전히 비었을 때만 넣었다. 그래서 명부에 사람을 새로
+    추가해도 배포한 서버는 영원히 예전 명부를 들고 있었고, 그 사람들은
+    사번·직급·이메일이 안 붙어서 리포트가 통째로 '보류' 로 떨어졌다.
+    화면에는 그 이유가 보이지 않으니 "사원 데이터가 안 읽힌다" 로만 보인다.
+
+    그렇다고 통째로 덮어쓰면 담당자가 화면에서 고쳐 둔 것이 조용히 사라진다.
+    그래서 **이미 있는 사번은 건드리지 않고, 없는 사번만 넣는다.**
 
     끄려면 HR_ROSTER_SEED=0.
     """
     if os.getenv("HR_ROSTER_SEED", "1").strip().lower() in ("0", "false", "no"):
         return None
     if not os.path.exists(SEED_CSV):
+        print(f"[명부] 기본 명부 파일이 없습니다 — {SEED_CSV}")
         return None
 
     from database import SessionLocal
     db = SessionLocal()
     try:
-        if db.query(RosterEntry).first() is not None:
-            return None                      # 이미 들어 있다 — 손대지 않는다
+        before = db.query(RosterEntry).count()
         with open(SEED_CSV, "rb") as fh:
-            got = load_csv(db, fh.read(), replace=False)
-        print(f"[명부] 기본 명부를 넣었습니다 — {got['total']}명 "
-              f"(발송 가능 {got['dispatchable']}, 제외 {got['excluded']})")
+            got = load_csv(db, fh.read(), replace=False, keep_existing=True)
+        if got["added"]:
+            print(f"[명부] 기본 명부에서 {got['added']}명을 채웠습니다 "
+                  f"(이미 있던 {before}명은 그대로) — 지금 {got['total']}명, "
+                  f"발송 가능 {got['dispatchable']}, 제외 {got['excluded']}")
+        else:
+            print(f"[명부] {got['total']}명 — 채울 사람 없음")
         return got
     except Exception as exc:                 # noqa: BLE001
         # 명부가 없다고 서버가 안 뜨면 안 된다. 리포트 생성은 명부 없이도 된다.
