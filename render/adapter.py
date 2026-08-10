@@ -16,6 +16,7 @@ import html as _html
 import re
 from typing import Dict, List, Optional
 
+import glossary
 from pipeline.rules.base import quote_allowed
 
 from .radar import legend_html, radar_svg
@@ -631,10 +632,16 @@ def _fixnotes(card: dict) -> dict:
                         if runs[j].get("emphasis") == "corrected_expression"), None)
             if not fix:
                 continue
+            left = (r.get("text") or "").strip()
+            right = (fix.get("text") or "").strip()
+            why = plain[:150].strip(" —→-") or None
             cards.append({
-                "left": (r.get("text") or "").strip(),
-                "right": (fix.get("text") or "").strip(),
-                "why": plain[:150].strip(" —→-") or None,
+                "left": left, "right": right, "why": why,
+                # "one-pager로 수치 정리" 처럼 한국어 안에 섞인 줄임말은
+                # 뜻을 모르면 무엇을 하라는 것인지 알 수 없다. 풀이를 붙인다.
+                # 통째로 영어인 교정 표현은 말하라고 가르친 문장이라 건드리지
+                # 않는다 (glossary.find 가 한국어가 섞인 것만 본다).
+                "terms": glossary.find(left, right, why or "") or None,
             })
     if not cards:
         return {}

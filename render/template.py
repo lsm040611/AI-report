@@ -231,6 +231,14 @@ em.em-key-concept{font-style:normal;font-weight:700;background:#FBEDBE;
 .fixcard .note{padding:12px 20px;font-size:13.5px;color:var(--ink-2);
   border-top:1px solid var(--line);line-height:1.7;background:var(--paper)}
 .fixcard .note b{color:var(--sk-red-deep);font-weight:700;margin-right:4px}
+/* 줄임말 풀이 — 배울 문구보다 눈에 띄면 안 된다 */
+.fixcard .gloss{padding:10px 20px;border-top:1px solid var(--line);
+  background:var(--paper);display:flex;flex-wrap:wrap;gap:6px 18px}
+.fixcard .gt{font-size:12.5px;color:var(--muted);line-height:1.6}
+.fixcard .gt b{font-weight:700;color:var(--ink-2);margin-right:6px;
+  font-family:var(--mono);font-size:12px}
+.fixcard .gt b::after{content:'=';margin-left:6px;color:var(--muted);
+  font-family:var(--sans);font-weight:400}
 
 /* ── 실천 체크리스트 ── */
 .todo{border:1px solid #4A3D2E;border-radius:5px;overflow:hidden}
@@ -625,13 +633,21 @@ def _fixnotes(s: dict) -> str:
         left_cls = "n" if c.get("neutral") else "x"
         left_label = esc(c.get("leftLabel") or ("지금의 습관" if c.get("neutral") else "✕ 이렇게 말고"))
         note = f'<div class="note"><b>왜</b>{esc(c["why"])}</div>' if c.get("why") else ""
+        # 줄임말 풀이. 교정 표현 아래에 조용히 붙인다 — 배울 문구보다
+        # 눈에 띄면 무엇이 본론인지 흐려진다.
+        terms = ""
+        if c.get("terms"):
+            items = "".join(
+                f'<span class="gt"><b>{esc(t["term"])}</b>'
+                f'{esc(t["meaning"])}</span>' for t in c["terms"])
+            terms = f'<div class="gloss">{items}</div>'
         out.append(
             f'<div class="fixcard"><div class="row">'
             f'<div class="side {left_cls}"><div class="tagline">{left_label}</div>'
             f'<div class="txt">{c.get("leftHtml") or esc(c.get("left"))}</div></div>'
             f'<div class="side o"><div class="tagline">{esc(c.get("rightLabel") or "✓ 이렇게")}</div>'
             f'<div class="txt">{c.get("rightHtml") or esc(c.get("right"))}</div></div>'
-            f'</div>{note}</div>')
+            f'</div>{terms}{note}</div>')
     return f'<div class="fixgrid">{"".join(out)}</div>'
 
 
