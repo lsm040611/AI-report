@@ -70,6 +70,18 @@ function esc(v) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// 글자로 요소를 찾는다. 이 프로토타입의 단추는 디자인 시스템이 만들어서
+// id 도 class 도 우리가 정할 수 없다. 화면에 보이는 글자가 가장 안정적인
+// 표적이고, 글자가 바뀌면 못 찾을 뿐 다른 것을 망가뜨리지는 않는다.
+function findByText(text) {
+  const nodes = document.querySelectorAll(
+    'button, [role="button"], a, x-import');
+  for (let i = 0; i < nodes.length; i++) {
+    if ((nodes[i].textContent || '').trim() === text) return nodes[i];
+  }
+  return null;
+}
+
 const API = {
   async get(path) {
     const r = await fetch(path, { credentials: 'same-origin' });
@@ -602,38 +614,56 @@ Object.assign(Component.prototype, {
   //
   // 두 화면이 같은 마크업을 쓰므로 한 번만 고치면 둘 다 적용된다.
   spaceFirstFlow() {
-    // ① 사번 칸 ↔ '설정 링크 발송'
-    const id = document.querySelector('input[placeholder*="EMP-"]');
-    if (id) {
-      let el = id;
+    // 이 화면의 단추는 전부 '입력을 마친 뒤에' 누르는 것들이다. 바로 위
+    // 입력 칸과 붙어 있으면 한 덩이로 보인다. **단추 쪽에 위 여백을 준다** —
+    // 입력 칸의 기존 margin 을 찾아 고치려 했더니, 브라우저가 인라인
+    // 스타일을 'margin-bottom: 20px' 로(콜론 뒤 공백) 정규화해서 문자열이
+    // 안 맞았고 아무 일도 일어나지 않았다. 남의 스타일 문자열에 기대지 않는다.
+    const BUTTONS = ['설정 링크 발송', '비밀번호 설정 완료',
+                     '설정 링크 열기 (시뮬레이션)'];
+    let touched = 0;
+    BUTTONS.forEach((label) => {
+      const el = findByText(label);
+      if (!el || el.dataset.hrSpaced) return;
+      el.dataset.hrSpaced = '1';
+      el.style.marginTop = '30px';
+      touched += 1;
+    });
+
+    // '새 비밀번호' 와 '확인' 도 붙어 있다(gap:18px). 서로 다른 것을 묻는
+    // 칸이라 붙여 두면 같은 칸에 두 번 치거나 확인 칸을 못 보고 넘어간다.
+    const pws = document.querySelectorAll('input[type="password"]');
+    if (pws.length >= 2) {
+      let el = pws[0];
       for (let i = 0; i < 8 && el; i++) {
         el = el.parentElement;
         if (!el) break;
-        const css = el.getAttribute('style') || '';
-        if (css.indexOf('margin-bottom:20px') < 0) continue;
+        if (el.querySelectorAll('input[type="password"]').length < 2) continue;
         if (!el.dataset.hrSpaced) {
           el.dataset.hrSpaced = '1';
-          el.style.marginBottom = '32px';
+          el.style.gap = '30px';
+          // flex 가 아닐 수도 있다. 그때는 칸 자체에 여백을 준다.
+          const second = pws[1].closest('[style]') || pws[1];
+          second.style.marginTop = '12px';
+          touched += 1;
         }
         break;
       }
     }
-
-    // ② '새 비밀번호' ↔ '새 비밀번호 확인' (gap:18px 로 한 칸처럼 보였다)
-    const pws = document.querySelectorAll('input[type="password"]');
-    if (pws.length < 2) return;
-    let el = pws[0];
-    for (let i = 0; i < 8 && el; i++) {
-      el = el.parentElement;
-      if (!el) return;
-      const st = window.getComputedStyle(el);
-      if (st.display !== 'flex' || st.flexDirection !== 'column') continue;
-      if (el.querySelectorAll('input[type="password"]').length < 2) continue;
-      if (el.dataset.hrSpaced) return;
-      el.dataset.hrSpaced = '1';
-      el.style.gap = '30px';
+    // 디자인 시스템 컴포넌트는 늦게 그려질 수 있다. 지금 없다고 포기하면
+    // 다음 화면 갱신이 없는 한 영영 안 고쳐진다 — 실제로 그래서 안 됐다.
+    // 찾을 때까지 잠깐 더 본다. (열 번, 0.1초 간격 = 1초)
+    if (!touched && this.state.view === 'first-flow') {
+      this._spaceTries = (this._spaceTries || 0) + 1;
+      if (this._spaceTries <= 10) {
+        setTimeout(() => {
+          if (this.state.view === 'first-flow') this.spaceFirstFlow();
+        }, 100);
+      }
       return;
     }
+    this._spaceTries = 0;
+    if (touched) note('화면 간격 조정', { 손댄곳: touched });
   },
 
   // 구성원 헤더 오른쪽의 프로필 원(이름 첫 글자). 화면 위에 늘 떠 있는
