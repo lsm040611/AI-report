@@ -594,12 +594,32 @@ Object.assign(Component.prototype, {
     return bar;
   },
 
-  // 비밀번호 설정·재설정 화면. '새 비밀번호' 와 '확인' 이 gap:18px 로 거의
-  // 붙어 있어서 한 칸처럼 보인다. 둘은 서로 다른 것을 묻는 칸이라 붙여 두면
-  // 같은 칸에 두 번 치거나 확인 칸을 못 보고 넘어간다. 사이를 벌린다.
+  // 최초 로그인 · 비밀번호 재설정 화면의 간격.
   //
-  // 비밀번호 칸이 둘 이상인 화면은 여기뿐이라, 로그인 화면은 안 건드린다.
-  spacePasswordFields() {
+  // 입력 칸과 그 아래 단추가 거의 붙어 있어서 한 덩이로 보인다. '무엇을
+  // 적는 칸' 과 '누르면 일이 벌어지는 단추' 는 눈으로 갈려야, 다 적기 전에
+  // 누르거나 확인 칸을 못 보고 넘어가는 일이 줄어든다.
+  //
+  // 두 화면이 같은 마크업을 쓰므로 한 번만 고치면 둘 다 적용된다.
+  spaceFirstFlow() {
+    // ① 사번 칸 ↔ '설정 링크 발송'
+    const id = document.querySelector('input[placeholder*="EMP-"]');
+    if (id) {
+      let el = id;
+      for (let i = 0; i < 8 && el; i++) {
+        el = el.parentElement;
+        if (!el) break;
+        const css = el.getAttribute('style') || '';
+        if (css.indexOf('margin-bottom:20px') < 0) continue;
+        if (!el.dataset.hrSpaced) {
+          el.dataset.hrSpaced = '1';
+          el.style.marginBottom = '32px';
+        }
+        break;
+      }
+    }
+
+    // ② '새 비밀번호' ↔ '새 비밀번호 확인' (gap:18px 로 한 칸처럼 보였다)
     const pws = document.querySelectorAll('input[type="password"]');
     if (pws.length < 2) return;
     let el = pws[0];
@@ -1800,7 +1820,7 @@ Component.prototype._syncReport = function () {
   };
 
   this.paintOperator();
-  if (s.view === 'first-flow') this.spacePasswordFields();
+  if (s.view === 'first-flow') this.spaceFirstFlow();
 
   if (s.view === 'admin-validate') {
     this.paintUploadHeader();
