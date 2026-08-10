@@ -1405,16 +1405,45 @@ Object.assign(Component.prototype, {
   // 되어도 넘쳐서 잘린 것처럼 보인다. 칸이 글자에 맞춰 늘어나게 한다.
   unclipNotices() {
     const boxes = document.querySelectorAll('div[style*="dashed"]');
+    let found = 0;
     for (let i = 0; i < boxes.length; i++) {
       const el = boxes[i];
       const css = el.getAttribute('style') || '';
-      if (!/height:\s*(46|56)px/.test(css) || el.dataset.hrUnclipped) continue;
+      if (!/height:\s*(46|56)px/.test(css)) continue;
+      found += 1;
+      if (el.dataset.hrUnclipped) continue;
       el.dataset.hrUnclipped = '1';
       el.style.height = 'auto';
       el.style.minHeight = '46px';
       el.style.padding = '10px 14px';
       el.style.lineHeight = '1.5';
       el.style.wordBreak = 'keep-all';   // 한국어는 단어 중간에서 끊지 않는다
+      el.style.whiteSpace = 'normal';    // 한 줄로 묶여 있으면 옆으로 잘린다
+      el.style.overflow = 'visible';
+      el.style.textOverflow = 'clip';
+
+      // 칸만 늘려서는 안 된다. 이 칸을 담은 카드가 높이를 못 박아 두면
+      // (hint-size="100%,170px") 카드가 다시 잘라 버린다. 위로 올라가며
+      // 넘치는 조상만 풀어 준다 — 넘치지 않는 것은 안 건드린다.
+      let up = el.parentElement;
+      for (let d = 0; d < 5 && up; d++, up = up.parentElement) {
+        const st = window.getComputedStyle(up);
+        if (st.overflow !== 'visible' || st.overflowY !== 'visible') {
+          up.style.overflow = 'visible';
+        }
+        const fixed = /height:\s*\d+px/.test(up.getAttribute('style') || '');
+        if (fixed && up.scrollHeight > up.clientHeight + 1) {
+          up.style.height = 'auto';
+          up.style.minHeight = up.clientHeight + 'px';
+        }
+      }
+    }
+    // 아직 안 그려졌으면 잠시 뒤 다시 본다
+    if (!found) {
+      this._unclipTries = (this._unclipTries || 0) + 1;
+      if (this._unclipTries <= 8) setTimeout(() => this.unclipNotices(), 120);
+    } else {
+      this._unclipTries = 0;
     }
   },
 
