@@ -158,16 +158,50 @@ def write_seed_xlsx(db: Session) -> int:
         for cell in ws[1]:
             cell.font = Font(bold=True)
             cell.fill = PatternFill("solid", fgColor="F0F0F2")
-        auto = Font(color="A80020")
+
+        # 노랑 = 담당자로 로그인할 수 있는 사람. 로그인 관문(/roster/staff)과
+        # **같은 기준**으로 칠한다. 다른 기준으로 칠하면 색과 실제 권한이
+        # 어긋나서, 색만 보고 "이 사람은 못 들어온다" 고 오해하게 된다.
+        staff_fill = PatternFill("solid", fgColor="FFF3BF")
+        auto_font = Font(color="A80020")
         for r in rows:
             ws.append(_cells(r))
+            line = ws[ws.max_row]
+            if is_staff(r, rows):
+                for cell in line:
+                    cell.fill = staff_fill
             if (r.person_id or "").startswith(PROVISIONAL):
-                for cell in ws[ws.max_row]:      # 자동 등록은 눈에 띄게
-                    cell.font = auto
+                for cell in line:                # 자동 등록은 붉은 글씨
+                    cell.font = auto_font
         for col, width in zip("ABCDEFGHIJKL",
                               (12, 10, 10, 26, 16, 14, 8, 10, 12, 10, 10, 40)):
             ws.column_dimensions[col].width = width
         ws.freeze_panes = "A2"
+
+        # 색이 무슨 뜻인지 파일 안에 적어 둔다. 따로 말로 전하면 잊힌다.
+        gd = wb.create_sheet("읽는 법")
+        gd.column_dimensions["A"].width = 16
+        gd.column_dimensions["B"].width = 62
+        gd["A1"] = "표시"
+        gd["B1"] = "뜻"
+        for cell in (gd["A1"], gd["B1"]):
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill("solid", fgColor="F0F0F2")
+        gd["A2"] = "노란 줄"
+        gd["A2"].fill = staff_fill
+        gd["B2"] = ("HR 담당자 — 담당자로 로그인할 수 있는 사람입니다. "
+                    f"기준: 비고(note)가 '{STAFF_MARK}' 로 시작하고 재직 중. "
+                    "담당자를 늘리려면 그 사람의 비고를 "
+                    f"'{STAFF_MARK} 담당 — …' 로 적으면 됩니다")
+        gd["A3"] = "붉은 글씨"
+        gd["A3"].font = auto_font
+        gd["B3"] = ("평가지에서 자동 등록된 사람 (사번 P로 시작). "
+                    "메일 주소를 채워야 발송됩니다")
+        gd["A4"] = "사번"
+        gd["B4"] = "E·M·X = 인사 시스템에서 온 사번 / P = 엔진이 임시로 부여"
+        for row in gd.iter_rows(min_row=2, max_row=4):
+            row[1].alignment = __import__("openpyxl").styles.Alignment(
+                wrap_text=True, vertical="center")
         wb.save(SEED_XLSX)
         return len(rows)
     except OSError as exc:
@@ -277,11 +311,45 @@ def seed_if_empty() -> Optional[dict]:
         db.close()
 
 
-# 담당자로 들어올 수 있는 사람 — 기본은 인사팀. 회사마다 이름이 다르므로
-# HR_STAFF_TEAMS 로 바꿀 수 있게 둔다 ("인사팀,HR팀,인재개발팀" 처럼).
+# 담당자로 들어올 수 있는 사람.
+#
+# 처음에는 '인사팀이면 담당자' 로 했는데 너무 넓었다. 인사팀에는 교육을
+# **받으러 온** 사람도 있다(홍민아·임소율은 특강 참가자다). 그 사람들까지
+# 담당자로 들어오면 전원의 평가 원문과 메일 주소를 보게 된다.
+#
+# 그래서 팀이 아니라 **명부에 적힌 표시**로 가른다. 비고(note)가 'HRD' 로
+# 시작하면 담당자다. 새 담당자를 넣을 때도 파일 한 줄이면 되고, 파일을
+# 열어 보면 누가 담당자인지 눈으로 보인다.
+def _staff_ids() -> set:
+    """HR_STAFF_IDS 로 사번을 직접 지정했다면 그것만 인정한다."""
+    raw = os.getenv("HR_STAFF_IDS", "")
+    return {t.strip().upper() for t in raw.split(",") if t.strip()}
+
+
+# 표시가 하나도 없는 명부(다른 회사 양식)에서는 마지막 수단으로 팀을 본다.
 def _staff_teams() -> set:
     raw = os.getenv("HR_STAFF_TEAMS", "인사팀,HR팀,인재개발팀,교육팀")
     return {t.strip() for t in raw.split(",") if t.strip()}
+
+
+STAFF_MARK = "HRD"
+
+
+def _marked_staff(rows) -> list:
+    return [r for r in rows if (r.note or "").strip().upper().startswith(STAFF_MARK)]
+
+
+def is_staff(row, rows=None) -> bool:
+    """이 사람이 담당자인가. 로그인 관문과 엑셀 색칠이 같은 답을 써야 한다."""
+    if (row.status or "active") != "active":
+        return False
+    ids = _staff_ids()
+    if ids:
+        return (row.person_id or "").upper() in ids
+    if rows is None or _marked_staff(rows):
+        return (row.note or "").strip().upper().startswith(STAFF_MARK)
+    # 아무도 표시돼 있지 않은 명부 — 그때만 팀으로 본다
+    return (row.team or "") in _staff_teams()
 
 
 @router.get("/staff")
@@ -306,9 +374,9 @@ def staff_login(empId: str = Query(..., description="사번"),
         raise HTTPException(404, f"명부에 없는 사번입니다 — {key}")
     if (row.status or "active") != "active":
         raise HTTPException(403, f"{row.name} 님은 재직 중이 아닙니다")
-    if (row.team or "") not in _staff_teams():
+    if not is_staff(row, db.query(RosterEntry).all()):
         raise HTTPException(
-            403, f"{row.name} 님은 담당자 권한이 없습니다 "
+            403, f"{row.name} 님은 담당자가 아닙니다 "
                  f"({row.team or '소속 미상'}) — 구성원으로 들어와 주십시오")
 
     return {"ok": True, "employee_id": row.person_id, "name": row.name,

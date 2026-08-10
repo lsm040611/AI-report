@@ -594,6 +594,28 @@ Object.assign(Component.prototype, {
     return bar;
   },
 
+  // 비밀번호 설정·재설정 화면. '새 비밀번호' 와 '확인' 이 gap:18px 로 거의
+  // 붙어 있어서 한 칸처럼 보인다. 둘은 서로 다른 것을 묻는 칸이라 붙여 두면
+  // 같은 칸에 두 번 치거나 확인 칸을 못 보고 넘어간다. 사이를 벌린다.
+  //
+  // 비밀번호 칸이 둘 이상인 화면은 여기뿐이라, 로그인 화면은 안 건드린다.
+  spacePasswordFields() {
+    const pws = document.querySelectorAll('input[type="password"]');
+    if (pws.length < 2) return;
+    let el = pws[0];
+    for (let i = 0; i < 8 && el; i++) {
+      el = el.parentElement;
+      if (!el) return;
+      const st = window.getComputedStyle(el);
+      if (st.display !== 'flex' || st.flexDirection !== 'column') continue;
+      if (el.querySelectorAll('input[type="password"]').length < 2) continue;
+      if (el.dataset.hrSpaced) return;
+      el.dataset.hrSpaced = '1';
+      el.style.gap = '30px';
+      return;
+    }
+  },
+
   // 구성원 헤더 오른쪽의 프로필 원(이름 첫 글자). 화면 위에 늘 떠 있는
   // 로그아웃 알약과 자리가 겹쳐서 서로 가린다. 둘 중 하나는 없어야 하는데,
   // 원은 이름 첫 글자만 보여 줄 뿐이고 이름은 바로 옆에 이미 적혀 있다.
@@ -1675,10 +1697,22 @@ Object.assign(Component.prototype, {
       out.onclick = () => this.logoutToLanding();
       bar.appendChild(out);
     }
-    // 첫 화면에서는 뒤로가기를 숨긴다 — 돌아갈 곳이 앱 바깥밖에 없다
-    const back = document.getElementById('hr-back');
-    if (back) back.style.visibility =
-      this.state.view === 'landing' ? 'hidden' : 'visible';
+    // 어느 화면에서 무엇을 보일지. 쓸 수 없는 단추가 떠 있으면 눌러 보고
+    // 아무 일도 안 일어나거나, 엉뚱한 데로 튄다.
+    const v = this.state.view;
+    // 로그인 전에는 로그아웃할 것이 없다
+    const BEFORE_LOGIN = (v === 'landing' || v === 'login' || v === 'first-flow');
+    // '만들어진 리포트' 는 검수 화면부터. 그 전에는 만들어진 것이 없고,
+    // 구성원에게는 남의 리포트 목록이라 보이면 안 된다.
+    const HAS_REPORTS = (v === 'admin-review' || v === 'admin-send');
+
+    const show = (id, on) => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = on ? '' : 'none';
+    };
+    show('hr-back', v !== 'landing');   // 첫 화면은 돌아갈 곳이 앱 바깥뿐이다
+    show('hr-logout', !BEFORE_LOGIN);
+    show('hr-list', HAS_REPORTS);
     this.hideSidebarLogout();
   },
 
@@ -1766,6 +1800,7 @@ Component.prototype._syncReport = function () {
   };
 
   this.paintOperator();
+  if (s.view === 'first-flow') this.spacePasswordFields();
 
   if (s.view === 'admin-validate') {
     this.paintUploadHeader();
