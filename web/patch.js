@@ -568,7 +568,9 @@ Object.assign(Component.prototype, {
       memberName: who.display || who.name,
       memberEmpId: who.employee_id,
     });
-    this.showToast(who.display + ' 님으로 들어왔습니다');
+    // 토스트는 안 띄운다. 위 띠에 '윤채린 과장 · E4112 · 인사팀' 이 계속
+    // 떠 있으므로, 검은 알림이 한 번 더 뜨면 화면만 가린다.
+    note('담당자 확인', who.display);
   },
 
   // 리포트에 실제로 들어 있는 대목만 키워드로 세운다. 계약이 정한 네 칸을
@@ -670,17 +672,40 @@ Object.assign(Component.prototype, {
   // 로그아웃 알약과 자리가 겹쳐서 서로 가린다. 둘 중 하나는 없어야 하는데,
   // 원은 이름 첫 글자만 보여 줄 뿐이고 이름은 바로 옆에 이미 적혀 있다.
   // 로그아웃은 여기서만 누를 수 있는 것이므로 원을 뺀다.
+  // 스타일 문자열이 아니라 **그려진 결과**로 찾는다. 마크업에는
+  // `border-radius:var(--radius-circle)` 로 적혀 있지만, 화면에 올라갈 때
+  // 값으로 치환되면 그 글자는 사라진다 — 문자열로 찾다가 못 찾았다.
   hideMemberAvatar() {
-    const all = document.querySelectorAll('div[style*="radius-circle"]');
+    const all = document.querySelectorAll('div');
     for (let i = 0; i < all.length; i++) {
       const el = all[i];
-      const css = el.getAttribute('style') || '';
-      if (css.indexOf('34px') < 0 || el.children.length) continue;
+      if (el.children.length) continue;
       if ((el.textContent || '').trim().length > 2) continue;
-      if (el.dataset.hrHidden) return;
+      if (el.dataset.hrHidden) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 26 || r.width > 44) continue;
+      if (Math.abs(r.width - r.height) > 3) continue;      // 정사각형
+      const st = window.getComputedStyle(el);
+      const radius = parseFloat(st.borderRadius) || 0;
+      const round = st.borderRadius.indexOf('%') >= 0 || radius >= r.width / 3;
+      if (!round) continue;
+      // 빨간 바탕 (SK 액션 레드). 다른 작은 동그라미까지 지우면 안 된다.
+      const bg = st.backgroundColor || '';
+      const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+      if (!m || +m[1] < 150 || +m[2] > 90 || +m[3] > 90) continue;
       el.dataset.hrHidden = '1';
       el.style.display = 'none';
+      this._avatarTries = 0;
       return;
+    }
+    // 아직 안 그려졌을 수 있다. 몇 번 더 본다 — 한 번 훑고 포기하면
+    // 다음 화면 갱신이 없는 한 영영 안 지워진다.
+    this._avatarTries = (this._avatarTries || 0) + 1;
+    if (this._avatarTries <= 8) {
+      setTimeout(() => {
+        const v = this.state.view;
+        if (v === 'member' || v === 'member-report') this.hideMemberAvatar();
+      }, 120);
     }
   },
 
