@@ -1176,8 +1176,14 @@ function bars(host, items) {
 // 막대 칸의 값만 지운다. 눈금(1차·2차·3차, 60-70…)은 이미 그려진 것에서
 // 읽어 와 그대로 다시 세운다 — 눈금까지 지우면 그 칸이 무엇을 보여 주는
 // 자리인지 알 수 없다. 라벨 모양은 bars() 가 만든 '값 · 눈금' 이다.
-function blankBars(host) {
+function blankBars(host, keepLabels) {
   if (!host) return;
+  if (!keepLabels) {
+    // 눈금 자체가 자료인 칸(1차·2차·3차, 1회·2회 — 몇 번 있었느냐가 곧
+    // 자료다). 올린 것이 없으면 회차도 없으므로 통째로 비운다.
+    host.innerHTML = '';
+    return;
+  }
   const spans = host.querySelectorAll('span');
   const labels = [];
   for (let i = 0; i < spans.length; i++) {
@@ -1632,17 +1638,24 @@ Object.assign(Component.prototype, {
       const m = findMetric(label);
       if (m && m.children.length === 0) m.textContent = '—';
     });
-    // 막대 칸도 **가로축은 남기고 값만 지운다.** 1차·2차·3차, 60-70 같은
-    // 눈금은 그 칸이 무엇을 보여 주는 자리인지 말해 주는 정보다.
-    ['회차별 평균 추이', '점수 분포', '시행 회차 추이'].forEach((title) => {
-      blankBars(findCard(title));
-    });
-    // 관계별 결과는 왼쪽이 관계 이름(본인·동료·상사)이라 남기고 값만 지운다
+    // 점수 분포의 눈금(60-70·70-80…)은 자료가 없어도 있는 구간이라 남긴다.
+    blankBars(findCard('점수 분포'), true);
+    // 회차 눈금은 다르다. 1차·2차·3차, 1회·2회 는 **몇 번 있었느냐**가 곧
+    // 자료다. 올린 것이 없으면 회차도 없으므로 남겨 둘 이유가 없다.
+    blankBars(findCard('회차별 평균 추이'), false);
+    blankBars(findCard('시행 회차 추이'), false);
+
+    // 관계별 결과는 왼쪽이 관계 이름(본인·동료·상사)이라 남기고 값만 지운다.
+    // 줄마다 첫 요소만 본다 — 'span:first-child' 로 훑으면 오른쪽 값 안의
+    // ▲0.3 까지 잡혀서 줄이 두 배가 된다.
     const rel = findCard('관계별 결과');
     if (rel) {
-      const labels = Array.prototype.map.call(
-        rel.querySelectorAll('span:first-child'), (n) => n.textContent.trim())
-        .filter(Boolean);
+      const labels = [];
+      for (let i = 0; i < rel.children.length; i++) {
+        const first = rel.children[i].firstElementChild;
+        const t = first ? (first.textContent || '').trim() : '';
+        if (t) labels.push(t);
+      }
       if (labels.length) rows(rel, labels.map((l) => ({ left: l, right: '—' })));
     }
     const sum = findCard('요약');
