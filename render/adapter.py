@@ -626,15 +626,38 @@ def _themes(card: dict, sid: Sentences) -> List[dict]:
 # ══════════════════════════════════════════════════════════════
 # 표현 교정 노트 — 강사가 쓴 X → Y 쌍을 회차와 무관하게 모은다
 # ══════════════════════════════════════════════════════════════
+# 강조 구간을 들어내면 그것을 감쌌던 껍데기가 남는다. 따옴표가 짝을 잃고
+# ' " " " " X. " " " " ' 처럼 보이고, 문장이 끊긴 자리에서 마침표가 겹친다.
+# 강조가 어디서 잘리느냐는 엑셀의 서식 구간에 달려 있어서, 따옴표가 강조
+# 안에 들어갈 때도 밖에 남을 때도 있다 — 그래서 뺀 뒤에 치운다.
+_EMPTY_QUOTES = re.compile(r'["“”\'‘’`]\s*["“”\'‘’`]')
+_LONE_QUOTE = re.compile(r'\s["“”\'‘’`]\s')
+_DUP_PUNCT = re.compile(r'([.,·…])\s*(?=[.,·…])')
+_ORPHAN_HEAD = re.compile(r'^[\s.,·…)\]}>»”’"\'-]+')
+
+
+def _why_line(runs: List[dict]) -> str:
+    """교정 노트의 '왜' 줄. 강조 구간을 뺀 나머지를 사람이 읽을 꼴로 만든다."""
+    text = " ".join((r.get("text") or "") for r in runs if not r.get("emphasis"))
+    text = re.sub(r"\s+", " ", text)
+    # 짝 잃은 따옴표 → 두 번 돌린다. '" " " "' 는 한 번에 다 안 지워진다.
+    for _ in range(2):
+        text = _EMPTY_QUOTES.sub(" ", text)
+    text = _LONE_QUOTE.sub(" ", text)
+    text = _DUP_PUNCT.sub("", text)            # '. .' → '.'
+    text = re.sub(r"\s+([.,])", r"\1", text)   # ' .' → '.'
+    text = re.sub(r"\s+", " ", text)
+    text = _ORPHAN_HEAD.sub("", text)          # 맨 앞에 남은 부스러기
+    return text.strip(" —→-·")
+
+
 def _fixnotes(card: dict) -> dict:
     if not quote_allowed(card):
         return {}
     cards = []
     for nar in card.get("narratives", []):
         runs = nar.get("runs") or []
-        plain = " ".join((r.get("text") or "") for r in runs
-                         if not r.get("emphasis")).strip()
-        plain = re.sub(r"\s+", " ", plain)
+        plain = _why_line(runs)
         # 원어로 남긴 표현의 뜻 (R-13 이 번역과 함께 받아 온다).
         # 문장은 원어로 둬야 외울 수 있고, 뜻은 옆에 있어야 쓸 수 있다.
         ko = nar.get("preserve_ko") or {}
