@@ -191,6 +191,11 @@ function toMember(c) {
     empId: String(c.empId || ('CARD-' + c.cardId)),
     cardId: c.cardId,
     email: c.email || '',
+    // 이 사람에게 보내도 되는가, 안 되면 왜. 개별 발송 단추가 이걸로
+    // 켜지고 꺼진다 — 화면이 '보낼 수 없음' 이라 하면서 서버는 보내는
+    // 일이 없도록, 판단 근거를 화면도 같이 들고 있는다.
+    sendable: c.sendable !== false,
+    blockedBy: c.blockedBy || '',
     status: SEVERITY_TO_STATUS[c.maxSeverity] || 'unreviewed',
     ...(c.maxSeverity === 'review' ? { warningAcked: false } : {}),
   };
@@ -477,6 +482,8 @@ Object.assign(Component.prototype, {
       holder.innerHTML = b.html;
 
       const parent = anchor.parentNode;
+      const stale = document.getElementById('hr-send-one');
+      if (stale) stale.remove();          // 앞 사람 것이 남으면 오발송이 된다
       ['items', 'feedback', 'compare', 'next'].forEach((id) => {
         const el = parent.querySelector(':scope > [data-section="' + id + '"]');
         if (el) parent.removeChild(el);
@@ -488,9 +495,99 @@ Object.assign(Component.prototype, {
         el.title = '클릭하면 이 문장의 근거를 봅니다';
         el.onclick = () => this.showEvidence(reportId, el.dataset.sentenceId);
       });
+
+      // 리포트를 눈으로 확인한 바로 그 자리에서 그 사람에게만 보낸다.
+      // 전체 발송은 되돌릴 수 없어서, 한 명씩 확인하며 보내고 싶을 때가 있다.
+      parent.insertBefore(this._sendOneBar(reportId), holder);
     } catch (err) {
       this._bodyShown = null;
       this.showToast('본문을 불러오지 못했습니다 — ' + err.message);
+    }
+  },
+
+  // 이 리포트가 누구 것인지 되짚는다. 화면이 들고 있는 카드→리포트 표를
+  // 뒤집어 쓴다 — 청강생 칸도 같이 본다.
+  _memberOfReport(reportId) {
+    const s = this.state;
+    const byCard = s.reportIdByCard || {};
+    const cardId = Object.keys(byCard)
+      .find((k) => String(byCard[k]) === String(reportId));
+    const all = (s.mainMembers || []).concat(
+      s.auditMemberData && !s.auditMemberData.empty ? [s.auditMemberData] : []);
+    return all.find((m) => String(m.cardId) === String(cardId)) || null;
+  },
+
+  // '이 사람에게만 보내기'. 전체 발송과 같은 관문을 지나며, 메일은 되돌릴
+  // 수 없으므로 주소를 보여 주고 한 번 되묻는다.
+  _sendOneBar(reportId) {
+    const bar = document.createElement('div');
+    bar.id = 'hr-send-one';
+    bar.style.cssText = 'display:flex;align-items:center;gap:10px;'
+      + 'flex-wrap:wrap;margin:0 0 16px;padding:12px 14px;border-radius:10px;'
+      + 'background:#FAFAFC;border:1px solid #E4E4E7;font-size:13px;'
+      + 'color:#48484D;word-break:keep-all';
+
+    const m = this._memberOfReport(reportId);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.style.cssText = 'font:inherit;font-size:12.5px;font-weight:600;'
+      + 'border:0;border-radius:999px;padding:8px 16px;cursor:pointer;'
+      + 'background:#EA002C;color:#fff';
+    const say = document.createElement('span');
+
+    if (!m) {
+      btn.textContent = '이 사람에게만 메일 보내기';
+      say.textContent = '누구의 리포트인지 확인하지 못했습니다.';
+      btn.disabled = true;
+    } else if (!m.sendable) {
+      btn.textContent = '보낼 수 없음';
+      say.textContent = m.blockedBy || '검수가 끝나지 않았습니다.';
+      btn.disabled = true;
+    } else if (!m.email) {
+      btn.textContent = '보낼 수 없음';
+      say.textContent = '메일 주소가 없습니다 — 명부를 확인해 주세요.';
+      btn.disabled = true;
+    } else {
+      btn.textContent = m.rawName + ' 님에게만 보내기';
+      say.textContent = m.email;
+      btn.onclick = () => this.sendOne(reportId, m, btn, say);
+    }
+    if (btn.disabled) {
+      btn.style.background = '#E4E4E7';
+      btn.style.color = '#78787E';
+      btn.style.cursor = 'not-allowed';
+    }
+    bar.appendChild(btn);
+    bar.appendChild(say);
+    return bar;
+  },
+
+  async sendOne(reportId, m, btn, say) {
+    if (!confirm(m.rawName + ' 님에게 리포트를 보냅니다.\n'
+                 + '받는 사람: ' + m.email + '\n\n'
+                 + '메일은 되돌릴 수 없습니다. 보낼까요?')) return;
+    btn.disabled = true;
+    const was = btn.textContent;
+    btn.textContent = '보내는 중…';
+    say.textContent = '';
+    try {
+      const r = await API.post('/reports/' + reportId + '/send', null);
+      if (r.sent) {
+        btn.textContent = '보냈습니다';
+        btn.style.background = '#1C8A53';
+        say.textContent = m.email + ' 로 보냈습니다.';
+        this.showToast(m.rawName + ' 님에게 보냈습니다');
+      } else {
+        btn.disabled = false;
+        btn.textContent = was;
+        say.textContent = r.reason || '보내지 못했습니다.';
+        this.showToast('보내지 못했습니다 — ' + (r.reason || ''));
+      }
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = was;
+      say.textContent = err.message;
+      this.showToast('보내지 못했습니다 — ' + err.message);
     }
   },
 

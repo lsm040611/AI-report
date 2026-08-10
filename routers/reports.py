@@ -351,6 +351,15 @@ def send_report(report_id: int, db: Session = Depends(get_db)):
     if not card:
         raise HTTPException(404, "카드 없음")
 
+    # 검수 관문. 여기가 비어 있었다 — 청강생도, 누구인지 아직 못 정한 사람도
+    # 메일이 나갔다. 화면은 '보낼 수 없음' 이라고 표시하면서 서버는 보내고
+    # 있었던 것이다. 메일은 되돌릴 수 없으니 이 확인이 마지막 기회다.
+    ok, why = is_sendable(card.card_json)
+    if not ok:
+        person = card.card_json.get("person") or {}
+        raise HTTPException(409, f"{person.get('name')} 님은 아직 보낼 수 "
+                                 f"없습니다 — {why}")
+
     person = (card.card_json.get("person") or {})
     to = person.get("email")
     if not mailer.valid(to):
@@ -410,9 +419,15 @@ def _send_all(db: Session, upload_id: int, on_progress=None) -> dict:
     for i, card in enumerate(cards, start=1):
         report = db.query(Report).filter(Report.card_id == card.id).one_or_none()
         person = (card.card_json.get("person") or {})
+        allowed, why = is_sendable(card.card_json)
         if report is None:
             results.append({"person": person.get("name"), "sent": False,
                             "reason": "리포트가 아직 없습니다"})
+        elif not allowed:
+            # 건너뛴 것은 조용히 넘기지 않는다. 왜 안 갔는지 표에 남긴다.
+            results.append({"person": person.get("name"), "sent": False,
+                            "to": person.get("email"), "skipped": True,
+                            "reason": why})
         else:
             try:
                 results.append(send_report(report.id, db))
