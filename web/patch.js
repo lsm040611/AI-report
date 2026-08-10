@@ -489,6 +489,8 @@ Object.assign(Component.prototype, {
       if (stale) stale.remove();          // 앞 사람 것이 남으면 오발송이 된다
       const oldTabs = document.getElementById('hr-rounds');
       if (oldTabs) oldTabs.remove();
+      const oldChips = document.getElementById('hr-chips');
+      if (oldChips) oldChips.remove();
       ['items', 'feedback', 'compare', 'next'].forEach((id) => {
         const el = parent.querySelector(':scope > [data-section="' + id + '"]');
         if (el) parent.removeChild(el);
@@ -511,6 +513,12 @@ Object.assign(Component.prototype, {
       // 무엇이 나아졌는지 확인할 수 있다.
       const tabs = this._roundTabs(reportId);
       if (tabs) parent.insertBefore(tabs, parent.firstChild);
+
+      // 본문 위 키워드 줄. 사이드바 목차는 화면이 좁으면 '목차 ▾' 로 접혀서
+      // 안 보인다 — 리포트가 무엇으로 이루어져 있는지는 접히면 안 되는
+      // 정보다. 여기 것은 줄이 넘어가므로 잘리지 않는다.
+      const chips = this._sectionChips(holder);
+      if (chips) parent.insertBefore(chips, holder);
     } catch (err) {
       this._bodyShown = null;
       this.showToast('본문을 불러오지 못했습니다 — ' + err.message);
@@ -546,6 +554,70 @@ Object.assign(Component.prototype, {
       memberEmpId: who.employee_id,
     });
     this.showToast(who.display + ' 님으로 들어왔습니다');
+  },
+
+  // 리포트에 실제로 들어 있는 대목만 키워드로 세운다. 계약이 정한 네 칸을
+  // 순서대로 보되, 이번 리포트에 없는 칸(1차수의 성장 비교 같은)은 빼고
+  // 그린다 — 눌러도 갈 곳이 없는 키워드는 없느니만 못하다.
+  _sectionChips(holder) {
+    const LABEL = { items: '항목별 평가', feedback: '서술 피드백',
+                    compare: '성장 비교', next: '다음 학습 제안' };
+    const old = document.getElementById('hr-chips');
+    if (old) old.remove();
+
+    const found = ['items', 'feedback', 'compare', 'next']
+      .filter((id) => holder.querySelector('[data-section="' + id + '"]'));
+    if (found.length < 2) return null;
+
+    const bar = document.createElement('div');
+    bar.id = 'hr-chips';
+    bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:7px;margin:0 0 18px';
+    found.concat(['requests']).forEach((id) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.style.cssText = 'font:inherit;font-size:12.5px;font-weight:600;'
+        + 'background:#FAFAFC;color:#48484D;border:1px solid #E4E4E7;'
+        + 'border-radius:999px;padding:7px 14px;cursor:pointer;'
+        + 'white-space:normal;word-break:keep-all;text-align:left';
+      b.textContent = LABEL[id] || '요청사항';
+      b.onclick = () => {
+        const el = document.querySelector('[data-section="' + id + '"]');
+        if (!el) return;
+        window.scrollBy({ top: el.getBoundingClientRect().top - 90,
+                          behavior: 'smooth' });
+      };
+      bar.appendChild(b);
+    });
+    return bar;
+  },
+
+  // 리포트 목차. 구성원이 긴 리포트에서 원하는 대목으로 바로 가는 길이라
+  // 여기가 잘리면 무엇이 있는지조차 알 수 없다.
+  //
+  // 마크업이 `font-size:13px; white-space:nowrap` 로 박아 두었는데, 사이드바
+  // 폭은 정해져 있다. '성장 비교 (1차수 → 2차수)' 같은 라벨이 통째로 잘린다.
+  // 줄이 넘어가게 풀고 글자를 조금 줄인다 — 문구를 깎는 대신 칸을 늘린다.
+  //
+  // 좁은 화면에서는 '목차 ▾' 로 접히는데, 접힌 줄도 잘려 있었다. 같이 푼다.
+  paintToc() {
+    const list = document.querySelector('[data-responsive="toc-list"]');
+    if (!list || list.dataset.hrToc) return;
+    list.dataset.hrToc = '1';
+
+    const items = list.children;
+    for (let i = 0; i < items.length; i++) {
+      const el = items[i];
+      el.style.whiteSpace = 'normal';
+      el.style.wordBreak = 'keep-all';     // 한국어는 낱말 중간에서 안 끊는다
+      el.style.fontSize = '12.5px';
+      el.style.lineHeight = '1.45';
+      el.style.padding = '9px 12px';
+    }
+    const toggle = document.querySelector('[data-responsive="toc-toggle-label"]');
+    if (toggle) {
+      toggle.style.whiteSpace = 'normal';
+      toggle.style.wordBreak = 'keep-all';
+    }
   },
 
   // 지금 누구로 들어와 있는지 화면 위에 붙인다. 여러 사람이 같은 링크를
@@ -1654,6 +1726,7 @@ Component.prototype._syncReport = function () {
   if (s.view === 'member' || s.view === 'member-report') {
     this.loadMyReports(s.employeeId || s.memberEmpId);
     this.unclipNotices();
+    this.paintToc();
   }
 
   if (s.view === 'admin' && s.subTab === 'insight') {
