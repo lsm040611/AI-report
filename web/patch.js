@@ -452,7 +452,10 @@ Object.assign(Component.prototype, {
     if (s.view === 'member-report') {
       // 어느 과정의 리포트인지로 찾는다. 같은 사람이 과정마다 다른 리포트를
       // 갖고 있으므로 이름만으로는 어느 것인지 정해지지 않는다.
-      return (s.memberReportByCourse || {})[s.currentReportCourse]
+      // 회차를 골랐으면 그것이 이긴다 — 안 골랐으면 최근 회차다.
+      const ck = s.currentReportCourse;
+      return (s.memberRoundPick || {})[ck]
+        || (s.memberReportByCourse || {})[ck]
         || (s.reportIdByName || {})[s.memberName] || null;
     }
     return null;
@@ -484,6 +487,8 @@ Object.assign(Component.prototype, {
       const parent = anchor.parentNode;
       const stale = document.getElementById('hr-send-one');
       if (stale) stale.remove();          // 앞 사람 것이 남으면 오발송이 된다
+      const oldTabs = document.getElementById('hr-rounds');
+      if (oldTabs) oldTabs.remove();
       ['items', 'feedback', 'compare', 'next'].forEach((id) => {
         const el = parent.querySelector(':scope > [data-section="' + id + '"]');
         if (el) parent.removeChild(el);
@@ -498,7 +503,14 @@ Object.assign(Component.prototype, {
 
       // 리포트를 눈으로 확인한 바로 그 자리에서 그 사람에게만 보낸다.
       // 전체 발송은 되돌릴 수 없어서, 한 명씩 확인하며 보내고 싶을 때가 있다.
-      parent.insertBefore(this._sendOneBar(reportId), holder);
+      // 구성원 화면에는 안 붙인다 — 자기 리포트를 자기가 보낼 일은 없다.
+      if (String(this.state.view || '').indexOf('admin') === 0) {
+        parent.insertBefore(this._sendOneBar(reportId), holder);
+      }
+      // 누적 과정은 회차마다 리포트가 따로 있다. 지난 회차를 볼 수 있어야
+      // 무엇이 나아졌는지 확인할 수 있다.
+      const tabs = this._roundTabs(reportId);
+      if (tabs) parent.insertBefore(tabs, parent.firstChild);
     } catch (err) {
       this._bodyShown = null;
       this.showToast('본문을 불러오지 못했습니다 — ' + err.message);
@@ -563,6 +575,81 @@ Object.assign(Component.prototype, {
     if (el.dataset.html !== html) {
       el.dataset.html = html;
       el.innerHTML = html;
+    }
+  },
+
+  // 지금 화면에서 고를 수 있는 회차들. 구성원 화면은 명부에서 받아 온
+  // 목록을, 담당자 화면은 이번에 올린 카드들을 쓴다.
+  _roundsHere() {
+    const s = this.state;
+    if (s.view === 'member-report') {
+      return (s.memberRoundsByCourse || {})[s.currentReportCourse] || [];
+    }
+    if (s.view === 'admin-review') {
+      // 같은 사람의 다른 회차 카드. 1차수·2차수를 함께 올렸을 때 생긴다.
+      const sel = (s.mainMembers || [])[s.selectedIdx];
+      if (!sel) return [];
+      const byCard = s.reportIdByCard || {};
+      return (s.mainMembers || [])
+        .filter((m) => m.empId === sel.empId && byCard[m.cardId])
+        .map((m) => ({ reportId: byCard[m.cardId], label: m.round || '이번 회차',
+                       date: '', score: null, sent: false }));
+    }
+    return [];
+  },
+
+  // 회차 고르는 줄. 하나뿐이면 그리지 않는다 — 고를 것이 없는 단추는
+  // 자리만 차지하고 무엇을 하라는 것인지 헷갈리게 한다.
+  _roundTabs(reportId) {
+    const rounds = this._roundsHere();
+    if (rounds.length < 2) {
+      const old = document.getElementById('hr-rounds');
+      if (old) old.remove();
+      return null;
+    }
+    const bar = document.createElement('div');
+    bar.id = 'hr-rounds';
+    bar.style.cssText = 'display:flex;align-items:center;gap:8px;'
+      + 'flex-wrap:wrap;margin:0 0 14px';
+    const cap = document.createElement('span');
+    cap.textContent = '회차';
+    cap.style.cssText = 'font-size:12px;font-weight:700;color:#78787E;'
+      + 'margin-right:2px';
+    bar.appendChild(cap);
+
+    rounds.forEach((r) => {
+      const on = String(r.reportId) === String(reportId);
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.style.cssText = 'font:inherit;font-size:12.5px;font-weight:600;'
+        + 'border-radius:999px;padding:7px 15px;cursor:pointer;'
+        + (on ? 'background:#EA002C;color:#fff;border:1px solid #EA002C'
+              : 'background:#fff;color:#1B1B1D;border:1px solid #E4E4E7');
+      b.textContent = r.label
+        + (r.score === null || r.score === undefined ? '' : ' · ' + r.score);
+      b.title = [r.date, r.sent ? '발송됨' : ''].filter(Boolean).join(' · ');
+      if (!on) b.onclick = () => this.pickRound(r.reportId);
+      bar.appendChild(b);
+    });
+    return bar;
+  },
+
+  pickRound(reportId) {
+    const s = this.state;
+    if (s.view === 'member-report') {
+      const pick = { ...(s.memberRoundPick || {}) };
+      pick[s.currentReportCourse] = reportId;
+      this._bodyShown = null;              // 다른 회차를 다시 그려야 한다
+      this.setState({ memberRoundPick: pick });
+      return;
+    }
+    // 담당자 화면은 카드를 골라 둔 자리로 옮긴다 — 그래야 발송 단추도 따라온다
+    const byCard = s.reportIdByCard || {};
+    const idx = (s.mainMembers || []).findIndex(
+      (m) => String(byCard[m.cardId]) === String(reportId));
+    if (idx >= 0) {
+      this._bodyShown = null;
+      this.setState({ selectedIdx: idx });
     }
   },
 
@@ -762,12 +849,19 @@ Object.assign(Component.prototype, {
       note('내 리포트', { 사번: key, 과정: (d.courses || []).length,
                          리포트: d.total });
 
-      const courses = [], byCourse = {};
+      const courses = [], byCourse = {}, roundsByCourse = {};
       (d.courses || []).forEach((c) => {
         const rounds = c.rounds || [];
         const last = rounds[rounds.length - 1] || {};
         const ck = c.courseId || ('c' + courses.length);
         byCourse[ck] = last.reportId;
+        // 회차마다 리포트가 따로 있다. 마지막 것만 들고 있으면 지난 회차를
+        // 볼 길이 없어진다 — 누적 과정에서는 그게 성장을 확인하는 자료다.
+        roundsByCourse[ck] = rounds.map((r, i) => ({
+          reportId: r.reportId,
+          label: r.round || (i + 1) + '차',
+          date: r.date || '', score: r.score, sent: !!r.sent,
+        })).filter((r) => r.reportId);
         courses.push({
           key: ck,
           type: TYPE_FROM_ENGINE[c.sourceType] || 'accumulated',
@@ -801,6 +895,8 @@ Object.assign(Component.prototype, {
       this.setState({
         memberExtraCourses: courses,
         memberReportByCourse: byCourse,
+        memberRoundsByCourse: roundsByCourse,
+        memberRoundPick: {},          // 고르기 전에는 최근 회차
         memberName: shown,
         memberPosition: who.position || '',
         memberTeam: who.team || '',
@@ -1079,6 +1175,7 @@ Object.assign(Component.prototype, {
       engineAnalysis: null, engineSummary: null, engineContext: null,
       engineFileName: null, engineCourses: null, engineInsight: null,
       memberExtraCourses: [], memberReportByCourse: {},
+      memberRoundsByCourse: {}, memberRoundPick: {},
       memberName: '', memberEmpId: '',
       sendStage: 'before', sendRows: null,
       fileFilter: null, reviewFileFilter: null,
