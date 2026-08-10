@@ -1584,9 +1584,58 @@ Object.assign(Component.prototype, {
     return null;
   },
 
+  // 올린 것이 없으면 인사이트 칸을 비운다.
+  //
+  // 프로토타입에는 예시 숫자가 들어 있다 — 아무것도 안 올렸는데 '점수 분포'
+  // 와 '회차별 평균 추이' 에 막대가 서 있고 평균이 82.4점이라고 뜬다.
+  // 그럴듯한 숫자라 진짜로 읽히고, 담당자가 그걸 보고 판단하면 사고가 된다.
+  //
+  // 칸(디자인)은 그대로 두고 값만 비운다 — 칸까지 없애면 무엇이 들어올
+  // 자리인지 알 수 없다.
+  blankInsight() {
+    const EMPTY = '아직 올린 평가지가 없습니다.';
+    // 화면이 다시 그려지면 예시 숫자도 되살아난다. 그래서 매번 확인하되,
+    // 이미 비어 있으면 손대지 않는다 — 매번 다시 쓰면 화면이 깜빡인다.
+    const done = findCard('점수 분포');
+    if (done && done.textContent.indexOf(EMPTY) >= 0) return;
+
+    // 지표 넷은 마크업에 87.0 · 96% · 82% 로 박혀 있다. 그럴듯한 숫자라
+    // 아무것도 안 올린 화면에서도 진짜처럼 읽힌다.
+    ['최근 회차 평균', '이수율', '열람률', '요청 건수'].forEach((label) => {
+      const m = findMetric(label);
+      if (m && m.children.length === 0) m.textContent = '—';
+    });
+    ['회차별 평균 추이', '점수 분포', '시행 회차 추이'].forEach((title) => {
+      const host = findCard(title);
+      if (host) {
+        host.innerHTML = '<div style="color:var(--muted-fg);font-size:12.5px">'
+          + EMPTY + '</div>';
+      }
+    });
+    rows(findCard('관계별 결과'), []);
+    rows(findCard('항목별 이번 회차 vs 과정 평균'), []);
+    const sum = findCard('요약');
+    if (sum) {
+      sum.innerHTML = '<span style="color:var(--muted-fg)">'
+        + '평가지를 올리면 여기에 요약이 나옵니다.</span>';
+    }
+    const all = document.querySelectorAll('div');
+    for (let i = 0; i < all.length; i++) {
+      const n = all[i];
+      if (n.children.length === 0 && n.textContent.trim().indexOf('💡') === 0) {
+        insightText(n, []);
+        break;
+      }
+    }
+  },
+
   paintInsight() {
     const d = this.state.engineInsight;
-    if (!d) return;
+    if (!d) {
+      // 고를 과정이 하나도 없다 = 올린 것이 없다. 예시 숫자를 지운다.
+      if (!(this.state.engineCourses || []).length) this.blankInsight();
+      return;
+    }
     const stamp = d.courseId + ':' + d.kind;
     if (this._paintedInsight === stamp) return;
     this._paintedInsight = stamp;
