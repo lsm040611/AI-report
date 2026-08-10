@@ -505,6 +505,67 @@ Object.assign(Component.prototype, {
     }
   },
 
+  // ── 담당자 로그인 ────────────────────────────────────────────────
+  // 원래는 사번을 받기만 하고 아무것도 확인하지 않았다. 누구든 아무 사번이나
+  // 넣으면 전원의 평가 원문과 메일 주소가 보였다. 남의 인사 자료가 걸린
+  // 화면이라 최소한 '인사팀 사람인가' 는 물어야 한다.
+  async adminLogin() {
+    const s = this.state;
+    const id = (s.employeeId || '').trim().toUpperCase();
+    if (!id) {
+      this.setState({ loginError: '사번을 입력하세요.' });
+      return;
+    }
+    this.setState({ loginError: '확인 중…' });
+    let who;
+    try {
+      who = await API.get('/roster/staff?empId=' + encodeURIComponent(id));
+    } catch (err) {
+      this.setState({ loginError: err.message });
+      return;
+    }
+    note('담당자 로그인', who);
+    this.setState({
+      view: 'admin', loginError: '',
+      operator: who,
+      // 화면 곳곳이 memberName 을 '지금 로그인한 사람' 으로 쓴다.
+      // 담당자도 같은 자리를 쓰게 해 두면 업로드 이력에 실명이 남는다.
+      memberName: who.display || who.name,
+      memberEmpId: who.employee_id,
+    });
+    this.showToast(who.display + ' 님으로 들어왔습니다');
+  },
+
+  // 지금 누구로 들어와 있는지 화면 위에 붙인다. 여러 사람이 같은 링크를
+  // 쓰므로, 내가 누구로 보고 있는지 안 보이면 남의 이름으로 발송하게 된다.
+  paintOperator() {
+    const w = this.state.operator;
+    const admin = String(this.state.view || '').indexOf('admin') === 0;
+    let el = document.getElementById('hr-who-am-i');
+    if (!w || !admin) { if (el) el.remove(); return; }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'hr-who-am-i';
+      el.style.cssText = 'position:fixed;top:12px;right:14px;z-index:9998;'
+        + 'display:flex;align-items:center;gap:8px;padding:7px 14px;'
+        + 'border-radius:999px;background:#fff;border:1px solid #E4E4E7;'
+        + 'box-shadow:0 1px 3px rgba(0,0,0,.06);font-size:12.5px;'
+        + 'color:#1B1B1D;white-space:nowrap';
+      document.body.appendChild(el);
+    }
+    const html = '<b style="font-weight:700">' + esc(w.name) + '</b>'
+      + (w.position ? ' <span style="color:#48484D">' + esc(w.position)
+                    + '</span>' : '')
+      + ' <span style="color:#C7C7CC">·</span>'
+      + ' <span style="font-family:\'IBM Plex Mono\',monospace;font-size:11.5px;'
+      + 'color:#78787E">' + esc(w.employee_id) + '</span>'
+      + (w.team ? ' <span style="color:#78787E">· ' + esc(w.team) + '</span>' : '');
+    if (el.dataset.html !== html) {
+      el.dataset.html = html;
+      el.innerHTML = html;
+    }
+  },
+
   // 이 리포트가 누구 것인지 되짚는다. 화면이 들고 있는 카드→리포트 표를
   // 뒤집어 쓴다 — 청강생 칸도 같이 본다.
   _memberOfReport(reportId) {
@@ -1001,9 +1062,13 @@ Object.assign(Component.prototype, {
     this._insightOf = null;
     this.paintProgress(null);
 
+    const badge = document.getElementById('hr-who-am-i');
+    if (badge) badge.remove();      // 나간 사람 이름이 남아 있으면 안 된다
+
     this.setState({
       view: 'landing', deepLink: false,
       employeeId: '', password: '', loginError: '',
+      operator: null,
       draftId: null, uploadId: null,
       mainMembers: [], validationRows: [], excludedRows: [],
       auditMemberData: { name: '', empId: '', status: 'none', empty: true,
@@ -1479,6 +1544,8 @@ Component.prototype._syncReport = function () {
     문장: (s.engineSentences || []).length,
   };
 
+  this.paintOperator();
+
   if (s.view === 'admin-validate') {
     this.paintUploadHeader();
     this.paintValidateTabs();
@@ -1541,6 +1608,13 @@ Component.prototype.renderVals = function () {
   // 사이드바에 이미 있는 로그아웃도 같은 동작으로 맞춘다 — 두 개가 다르게
   // 동작하면 어느 쪽을 눌렀는지에 따라 남는 것이 달라진다.
   props.goLanding = () => this.logoutToLanding();
+
+  // 담당자로 들어올 때만 명부에 물어본다. 구성원 쪽은 원래대로 둔다 —
+  // 거기는 이미 사번으로 자기 리포트만 찾아 오게 되어 있다.
+  if (s.role === 'admin') {
+    props.doLogin = () => this.adminLogin();
+    props.loginHint = '인사팀 사번으로 들어옵니다';
+  }
 
   // 문장이 만들어지는 중에는 승인·발송으로 넘어가지 못하게 한다.
   // 검수는 보고 나서 하는 일이고, 발송은 되돌릴 수 없다.

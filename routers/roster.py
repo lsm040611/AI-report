@@ -161,6 +161,47 @@ def seed_if_empty() -> Optional[dict]:
         db.close()
 
 
+# 담당자로 들어올 수 있는 사람 — 기본은 인사팀. 회사마다 이름이 다르므로
+# HR_STAFF_TEAMS 로 바꿀 수 있게 둔다 ("인사팀,HR팀,인재개발팀" 처럼).
+def _staff_teams() -> set:
+    raw = os.getenv("HR_STAFF_TEAMS", "인사팀,HR팀,인재개발팀,교육팀")
+    return {t.strip() for t in raw.split(",") if t.strip()}
+
+
+@router.get("/staff")
+def staff_login(empId: str = Query(..., description="사번"),
+                db: Session = Depends(get_db)):
+    """이 사번이 담당자로 들어와도 되는 사람인가.
+
+    지금까지 담당자 화면은 사번을 받기만 하고 아무것도 확인하지 않았다.
+    누구든 아무 사번이나 넣으면 전원의 평가 원문과 메일 주소를 볼 수 있었다.
+    남의 인사 자료가 걸린 화면이라 그대로 두면 안 된다.
+
+    비밀번호는 여기서 보지 않는다 — 회사 계정 체계가 붙기 전까지의 임시
+    관문이고, '인사팀 사람만' 이라는 최소한의 선부터 긋는다.
+    """
+    key = (empId or "").strip().upper()
+    if not key:
+        raise HTTPException(400, "사번을 입력해 주십시오")
+
+    row = (db.query(RosterEntry)
+             .filter(RosterEntry.person_id == key).one_or_none())
+    if row is None:
+        raise HTTPException(404, f"명부에 없는 사번입니다 — {key}")
+    if (row.status or "active") != "active":
+        raise HTTPException(403, f"{row.name} 님은 재직 중이 아닙니다")
+    if (row.team or "") not in _staff_teams():
+        raise HTTPException(
+            403, f"{row.name} 님은 담당자 권한이 없습니다 "
+                 f"({row.team or '소속 미상'}) — 구성원으로 들어와 주십시오")
+
+    return {"ok": True, "employee_id": row.person_id, "name": row.name,
+            "position": row.position, "team": row.team,
+            "division": row.department,
+            # 화면이 '윤채린 과장' 으로 부른다. 이름만 있으면 누구인지 흐리다.
+            "display": f"{row.name} {row.position}".strip()}
+
+
 @router.post("/reset")
 def reset_to_seed(db: Session = Depends(get_db)):
     """명부를 저장소에 든 기본 파일로 되돌린다.
