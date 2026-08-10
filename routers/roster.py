@@ -114,6 +114,63 @@ def load_csv(db: Session, raw: bytes, replace: bool = True,
             "columns": {k: v for k, v in mapping.items()}}
 
 
+def append_to_seed(entries) -> int:
+    """자동 등록한 사람을 seed/employees.csv 에도 적어 둔다.
+
+    DB 만 고치면 서버가 다시 뜰 때 사라진다(무료 배포는 DB 가 휘발된다).
+    파일에 적어 두면 다음에 뜰 때 자동 적재가 다시 채워 준다.
+
+    파일을 못 쓰는 환경(읽기 전용 배포)에서는 조용히 넘어간다 — 명부에
+    사람을 못 적었다고 리포트 생성을 실패시킬 이유는 없다. 그때는
+    /roster/export 로 내려받아 저장소 파일을 갱신하면 된다.
+
+    끄려면 HR_ROSTER_SEED_WRITE=0.
+    """
+    if os.getenv("HR_ROSTER_SEED_WRITE", "1").strip().lower() in ("0", "false", "no"):
+        return 0
+    rows = [e for e in (entries or []) if getattr(e, "person_id", None)]
+    if not rows or not os.path.exists(SEED_CSV):
+        return 0
+
+    order = ["employee_id", "name_ko", "alias_en", "email", "division", "team",
+             "position", "employment_status", "hire_date", "manager_id",
+             "location", "note"]
+    field = {"employee_id": "person_id", "name_ko": "name", "alias_en": "alias",
+             "email": "email", "division": "department", "team": "team",
+             "position": "position", "employment_status": "status",
+             "note": "note"}
+    try:
+        raw = open(SEED_CSV, "rb").read()
+        nl = "\r\n" if b"\r\n" in raw else "\n"
+        text = raw.decode("utf-8-sig")
+        have = {ln.split(",")[0] for ln in text.splitlines()[1:] if ln.strip()}
+
+        out = []
+        for e in rows:
+            if e.person_id in have:
+                continue
+            cells = []
+            for col in order:
+                v = getattr(e, field[col], None) if col in field else None
+                v = "" if v is None else str(v)
+                # 값에 쉼표가 들어가면 칸이 밀린다. 표준대로 감싼다.
+                cells.append(f'"{v}"' if ("," in v or '"' in v) else v)
+            out.append(",".join(cells))
+        if not out:
+            return 0
+
+        if not text.endswith(("\n", "\r")):
+            text += nl
+        with open(SEED_CSV, "wb") as fh:
+            fh.write(("﻿" + text.lstrip("﻿")
+                      + nl.join(out) + nl).encode("utf-8"))
+        print(f"[명부] seed/employees.csv 에 {len(out)}명을 적었습니다")
+        return len(out)
+    except OSError as exc:
+        print(f"[명부] 파일에 적지 못했습니다 (읽기 전용일 수 있습니다) — {exc}")
+        return 0
+
+
 # 저장소에 함께 두는 기본 명부. 무료 배포는 서버가 다시 뜰 때마다 DB 가
 # 비워지는데, 그때마다 사람이 CSV 를 다시 올리는 것은 잊기 쉽다.
 SEED_CSV = os.path.join(
@@ -235,6 +292,33 @@ def find(employee_id: Optional[str] = None, name: Optional[str] = None,
         raise HTTPException(400, "employee_id · name · alias 중 하나를 주시거나 "
                                  "all=1 로 전수 조회하십시오")
     return {"employees": [_out(r) for r in q.all()]}
+
+
+@router.get("/export")
+def export_csv(db: Session = Depends(get_db)):
+    """지금 명부를 CSV 로 내려받는다.
+
+    자동 등록된 사람까지 담긴다. 배포한 서버가 읽기 전용이라 파일에 못 적은
+    경우, 이것을 받아 저장소의 seed/employees.csv 를 갈아 두면 다음 배포부터
+    그대로 올라간다.
+    """
+    from fastapi.responses import Response
+    order = ["employee_id", "name_ko", "alias_en", "email", "division", "team",
+             "position", "employment_status", "hire_date", "manager_id",
+             "location", "note"]
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\r\n")
+    w.writerow(order)
+    for r in db.query(RosterEntry).order_by(RosterEntry.person_id).all():
+        w.writerow([r.person_id, r.name, r.alias or "", r.email or "",
+                    r.department or "", r.team or "", r.position or "",
+                    r.status or "active", "", r.manager_id or "", "",
+                    r.note or ""])
+    # 엑셀이 한글을 깨지 않게 BOM 을 붙인다
+    body = ("﻿" + buf.getvalue()).encode("utf-8")
+    return Response(body, media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition":
+                             'attachment; filename="employees.csv"'})
 
 
 @router.get("/summary")

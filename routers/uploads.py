@@ -21,7 +21,9 @@ from models import (Card, CompetencyMapping, Course, CourseAlias, Handoff,
 from pipeline import courses as coursematch
 from pipeline import run_pipeline
 from pipeline.analyze import analyze
-from pipeline.rules.base import is_reportable, is_sendable, max_severity
+from pipeline.rules.base import (NOTICE, add_flag, is_reportable,
+                                 is_sendable, max_severity)
+from routers import roster as roster_mod
 import progress
 from contract import SOURCE_TYPES
 from routers.reports import build_report
@@ -342,6 +344,9 @@ def commit_draft(draft_id: int, req: CommitRequest,
             raise HTTPException(400, f"{os.path.basename(path)} 에서 카드를 "
                                      f"만들지 못했습니다 — "
                                      f"{type(exc).__name__}: {exc}")
+        # 명부에 없는 사람을 임시 사번으로 넣는다. 카드를 저장하기 **전에**
+        # 해야 사번이 함께 저장된다 — 나중에 하면 카드에는 안 붙는다.
+        _autoregister(db, result["cards"])
         for card_json in result["cards"]:
             db.add(_to_row(upload.id, card_json))
         all_cards += len(result["cards"])
@@ -721,6 +726,88 @@ def _queue_handoffs(db: Session, upload_id: int, handoffs) -> None:
         if cid:
             db.add(Handoff(card_id=cid, rule_id=h["rule_id"],
                            task=h["task"], payload=h["payload"]))
+
+
+# 자동 등록으로 만든 사번의 앞글자. 사람이 준 사번(E·M·X)과 섞이면 안 된다 —
+# 어느 것이 확인된 신원이고 어느 것이 우리가 세운 임시 값인지 나중에 못 가린다.
+PROVISIONAL = "P"
+
+
+def _autoregister(db: Session, cards: List[dict]) -> List[dict]:
+    """평가지에 있는데 명부에 없는 사람을 임시로 명부에 넣는다.
+
+    끄려면 HR_ROSTER_AUTOADD=0.
+
+    **하지 않는 것 두 가지가 요점이다.**
+
+    1. 이름이 이미 명부에 있으면 넣지 않는다. 넣으면 없던 동명이인을
+       우리가 만들어 내는 셈이고, 그때부터 어느 쪽이 진짜인지 아무도 모른다.
+       그런 사람은 지금까지처럼 담당자에게 묻는다.
+    2. 메일 주소는 지어내지 않는다. 그래서 자동 등록된 사람은 리포트는
+       나오지만 **발송은 계속 막힌다.** 사람이 주소를 채워야 열린다.
+
+    즉 이것이 여는 것은 '명부에 없음' 하나뿐이다. 발송 관문은 그대로다.
+    """
+    if os.getenv("HR_ROSTER_AUTOADD", "1").strip().lower() in ("0", "false", "no"):
+        return []
+
+    rows = db.query(RosterEntry).all()
+    by_name: dict = {}
+    for r in rows:
+        by_name.setdefault(r.name, []).append(r)
+    used = {r.person_id for r in rows}
+
+    seq = 0
+    for pid in used:                              # 이어지는 번호를 찾는다
+        if pid.startswith(PROVISIONAL) and pid[1:].isdigit():
+            seq = max(seq, int(pid[1:]))
+
+    made, fresh = [], {}
+    for card in cards:
+        person = card.get("person") or {}
+        name = (person.get("name") or "").strip()
+        if person.get("person_id") or not name:
+            continue
+        if name in by_name:
+            continue                              # 동명이인은 사람이 정한다
+
+        entry = fresh.get(name)
+        if entry is None:
+            seq += 1
+            pid = f"{PROVISIONAL}{seq:04d}"
+            while pid in used:
+                seq += 1
+                pid = f"{PROVISIONAL}{seq:04d}"
+            used.add(pid)
+            entry = RosterEntry(
+                person_id=pid, name=name,
+                department=person.get("부서"), team=person.get("팀"),
+                position=person.get("position"), status="active",
+                note="평가지에서 자동 등록 — 사번·메일 확인 필요")
+            db.add(entry)
+            fresh[name] = entry
+            made.append({"person_id": pid, "name": name})
+
+        # 카드에도 바로 반영한다. 다시 돌리지 않아도 사번이 붙는다.
+        person["person_id"] = entry.person_id
+        card["person"] = person
+        for f in card.get("flags", []):
+            if f.get("code") == "person_not_in_roster":
+                f.update({"resolved": True, "decision": "approve",
+                          "resolved_by": "자동 등록"})
+        add_flag(card, "auto_registered", NOTICE,
+                 detail=f"명부에 없어 임시 사번 {entry.person_id} 을(를) "
+                        f"부여했습니다 — 사번과 메일을 확인해 주십시오")
+        add_flag(card, "no_email", NOTICE,
+                 detail="자동 등록된 사람이라 메일 주소가 없습니다 — "
+                        "명부에서 채워야 발송됩니다")
+
+    if made:
+        db.flush()
+        print(f"[명부] 평가지에서 {len(made)}명을 자동 등록했습니다 — "
+              + ", ".join(f"{x['name']}({x['person_id']})" for x in made))
+        roster_mod.append_to_seed(list(fresh.values()))
+    return made
 
 
 def _roster(db: Session) -> dict:

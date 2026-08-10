@@ -162,7 +162,27 @@ def is_sendable(card: dict) -> Tuple[bool, str]:
 
     if not (card.get("source_type") or {}).get("confirmed_by_operator"):
         return False, "source_type 승인 전입니다"
+
+    # 주소가 없으면 보낼 수 없다. 당연한데 여기 없었다 — 그래서 목록은
+    # '보낼 수 있음' 이라고 하고, 정작 발송 단계에서 400 이 났다.
+    # 못 보낼 것은 못 보낸다고 목록에서부터 말해야 한다.
+    if not _has_email(person.get("email")):
+        return False, "메일 주소가 없습니다 — 명부에서 채워야 발송됩니다"
     return True, ""
+
+
+def _has_email(v) -> bool:
+    """주소처럼 생겼는가.
+
+    발송 직전에 mailer 가 한 번 더 본다. 여기서는 규칙 계층이 바깥 모듈에
+    기대지 않도록 최소한만 확인한다.
+    """
+    s = str(v or "").strip()
+    if s.count("@") != 1:
+        return False
+    user, _, host = s.partition("@")
+    return bool(user) and "." in host and not host.startswith(".") \
+        and not host.endswith(".")
 
 
 # **보내는 것**만 막는 hold. 리포트를 만드는 것은 막지 않는다.
