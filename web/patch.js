@@ -139,6 +139,9 @@ function toValidationRows(rows) {
 }
 
 // 엔진의 cards[] → 검수 명단이 쓰는 모양
+// 위 띠의 높이. 본문을 이만큼 내려서 자리를 만든다.
+const BAR_H = 44;
+
 const SEVERITY_TO_STATUS = {
   hold: 'hold', review: 'review', block_direct_quote: 'summary',
 };
@@ -591,6 +594,24 @@ Object.assign(Component.prototype, {
     return bar;
   },
 
+  // 구성원 헤더 오른쪽의 프로필 원(이름 첫 글자). 화면 위에 늘 떠 있는
+  // 로그아웃 알약과 자리가 겹쳐서 서로 가린다. 둘 중 하나는 없어야 하는데,
+  // 원은 이름 첫 글자만 보여 줄 뿐이고 이름은 바로 옆에 이미 적혀 있다.
+  // 로그아웃은 여기서만 누를 수 있는 것이므로 원을 뺀다.
+  hideMemberAvatar() {
+    const all = document.querySelectorAll('div[style*="radius-circle"]');
+    for (let i = 0; i < all.length; i++) {
+      const el = all[i];
+      const css = el.getAttribute('style') || '';
+      if (css.indexOf('34px') < 0 || el.children.length) continue;
+      if ((el.textContent || '').trim().length > 2) continue;
+      if (el.dataset.hrHidden) return;
+      el.dataset.hrHidden = '1';
+      el.style.display = 'none';
+      return;
+    }
+  },
+
   // 리포트 목차. 구성원이 긴 리포트에서 원하는 대목으로 바로 가는 길이라
   // 여기가 잘리면 무엇이 있는지조차 알 수 없다.
   //
@@ -624,18 +645,21 @@ Object.assign(Component.prototype, {
   // 쓰므로, 내가 누구로 보고 있는지 안 보이면 남의 이름으로 발송하게 된다.
   paintOperator() {
     const w = this.state.operator;
-    const admin = String(this.state.view || '').indexOf('admin') === 0;
+    const admin = String(this.state.view || '').indexOf('admin') === 0
+      || this.state.view === 'admin';
     let el = document.getElementById('hr-who-am-i');
+    const gap = document.getElementById('hr-bar-gap');
     if (!w || !admin) { if (el) el.remove(); return; }
     if (!el) {
       el = document.createElement('div');
       el.id = 'hr-who-am-i';
-      el.style.cssText = 'position:fixed;top:12px;right:14px;z-index:9998;'
-        + 'display:flex;align-items:center;gap:8px;padding:7px 14px;'
-        + 'border-radius:999px;background:#fff;border:1px solid #E4E4E7;'
-        + 'box-shadow:0 1px 3px rgba(0,0,0,.06);font-size:12.5px;'
-        + 'color:#1B1B1D;white-space:nowrap';
-      document.body.appendChild(el);
+      // 띠 안에 넣는다. 따로 띄우면 또 무언가와 겹친다.
+      el.style.cssText = 'display:flex;align-items:center;gap:8px;'
+        + 'padding:6px 13px;border-radius:999px;background:#fff;'
+        + 'border:1px solid #E4E4E7;font-size:12.5px;color:#1B1B1D;'
+        + 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+      if (gap && gap.parentNode) gap.parentNode.insertBefore(el, gap.nextSibling);
+      else document.body.appendChild(el);
     }
     const html = '<b style="font-weight:700">' + esc(w.name) + '</b>'
       + (w.position ? ' <span style="color:#48484D">' + esc(w.position)
@@ -1586,62 +1610,90 @@ Object.assign(Component.prototype, {
     this._paintBackButton();
   },
 
-  // 화면 왼쪽 위에 작은 뒤로 버튼. 돌아갈 곳이 있을 때만 보인다.
+  // 화면 위에 늘 있는 띠 — 뒤로 · 만들어진 리포트 · 로그아웃 · 지금 누구.
+  //
+  // 예전에는 이 단추들을 각자 화면 구석에 띄웠다(position:fixed). 그러니
+  // 왼쪽 위 '← 뒤로' 는 'SK 담당자' 제목을, 오른쪽 위 '로그아웃' 은 구성원
+  // 프로필 원을 가렸다. 겹칠 때마다 몇 px 씩 밀어 봐야 화면 폭이 바뀌면
+  // 또 겹친다.
+  //
+  // 그래서 띄우지 않고 **자리를 만든다.** 띠 하나를 맨 위에 두고 본문을
+  // 그 높이만큼 내린다. 그러면 무엇과도 겹칠 수 없다.
   _paintBackButton() {
-    let b = document.getElementById('hr-back');
-    if (!b) {
-      b = document.createElement('button');
-      b.id = 'hr-back';
-      b.type = 'button';
-      b.textContent = '← 뒤로';
-      b.title = '이전 화면으로 (브라우저 뒤로가기와 같습니다)';
-      b.setAttribute('style', [
-        'position:fixed', 'left:16px', 'top:14px', 'z-index:9000',
-        'height:30px', 'padding:0 14px', 'font-size:12.5px',
-        'font-family:inherit', 'border-radius:999px',
-        'border:1px solid rgba(0,0,0,.14)', 'background:rgba(255,255,255,.92)',
-        'color:#3a3a3a', 'cursor:pointer', 'backdrop-filter:blur(6px)',
-        'box-shadow:0 1px 4px rgba(0,0,0,.10)',
+    let bar = document.getElementById('hr-bar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'hr-bar';
+      bar.setAttribute('style', [
+        'position:fixed', 'left:0', 'right:0', 'top:0', 'z-index:9000',
+        'height:' + BAR_H + 'px', 'display:flex', 'align-items:center',
+        'gap:8px', 'padding:0 14px', 'box-sizing:border-box',
+        'background:rgba(255,255,255,.92)', 'backdrop-filter:blur(8px)',
+        'border-bottom:1px solid rgba(0,0,0,.08)',
       ].join(';'));
-      b.onclick = () => history.back();
-      document.body.appendChild(b);
-    }
+      document.body.appendChild(bar);
+      // 본문이 띠 밑으로 들어가지 않게 자리를 비워 둔다
+      document.body.style.paddingTop = BAR_H + 'px';
 
-    // 오른쪽 위 단추 둘 — 어느 화면에서나 보인다.
-    // 사이드바의 로그아웃은 홈·구성원 화면에만 있어서, 업로드나 검수 중에는
-    // 빠져나갈 길이 없었다.
-    const PILL = (right) => [
-      'position:fixed', 'right:' + right + 'px', 'top:14px', 'z-index:9000',
-      'height:30px', 'padding:0 14px', 'font-size:12.5px', 'font-family:inherit',
-      'line-height:30px', 'border-radius:999px', 'text-decoration:none',
-      'border:1px solid rgba(0,0,0,.14)', 'background:rgba(255,255,255,.92)',
-      'color:#3a3a3a', 'cursor:pointer', 'backdrop-filter:blur(6px)',
-      'box-shadow:0 1px 4px rgba(0,0,0,.10)',
-    ].join(';');
+      const PILL = [
+        'height:30px', 'padding:0 14px', 'font-size:12.5px',
+        'font-family:inherit', 'line-height:28px', 'border-radius:999px',
+        'text-decoration:none', 'border:1px solid rgba(0,0,0,.14)',
+        'background:#fff', 'color:#3a3a3a', 'cursor:pointer',
+        'white-space:nowrap',
+      ].join(';');
 
-    if (!document.getElementById('hr-list')) {
+      const back = document.createElement('button');
+      back.id = 'hr-back';
+      back.type = 'button';
+      back.textContent = '← 뒤로';
+      back.title = '이전 화면으로 (브라우저 뒤로가기와 같습니다)';
+      back.setAttribute('style', PILL);
+      back.onclick = () => history.back();
+      bar.appendChild(back);
+
+      const spacer = document.createElement('div');
+      spacer.id = 'hr-bar-gap';
+      spacer.style.cssText = 'flex:1;min-width:0';
+      bar.appendChild(spacer);
+
       const a = document.createElement('a');
       a.id = 'hr-list';
       a.href = '/list';
       a.target = '_blank';
       a.textContent = '만들어진 리포트 ↗';
       a.title = '새로 고쳐도 남아 있는 목록';
-      a.setAttribute('style', PILL(122));
-      document.body.appendChild(a);
+      a.setAttribute('style', PILL);
+      bar.appendChild(a);
+
+      const out = document.createElement('button');
+      out.id = 'hr-logout';
+      out.type = 'button';
+      out.textContent = '로그아웃';
+      out.title = '처음 화면(담당자 / 구성원 선택)으로';
+      out.setAttribute('style', PILL);
+      out.onclick = () => this.logoutToLanding();
+      bar.appendChild(out);
     }
-    if (!document.getElementById('hr-logout')) {
-      const b2 = document.createElement('button');
-      b2.id = 'hr-logout';
-      b2.type = 'button';
-      b2.textContent = '로그아웃';
-      b2.title = '처음 화면(담당자 / 구성원 선택)으로';
-      b2.setAttribute('style', PILL(16));
-      b2.onclick = () => this.logoutToLanding();
-      document.body.appendChild(b2);
+    // 첫 화면에서는 뒤로가기를 숨긴다 — 돌아갈 곳이 앱 바깥밖에 없다
+    const back = document.getElementById('hr-back');
+    if (back) back.style.visibility =
+      this.state.view === 'landing' ? 'hidden' : 'visible';
+    this.hideSidebarLogout();
+  },
+
+  // 사이드바(왼쪽 아래) 로그아웃을 없앤다. 위 띠에 같은 단추가 있어서
+  // 둘 중 어느 것을 눌렀는지에 따라 사람이 헷갈린다. 위 띠 것은 어느
+  // 화면에서나 있고 사이드바 것은 몇 화면에만 있으므로, 남길 것은 위 것이다.
+  hideSidebarLogout() {
+    const all = document.querySelectorAll('div[role="button"]');
+    for (let i = 0; i < all.length; i++) {
+      const el = all[i];
+      if ((el.textContent || '').trim() !== '로그아웃') continue;
+      if (el.dataset.hrHidden) continue;
+      el.dataset.hrHidden = '1';
+      el.style.display = 'none';
     }
-    // 첫 화면에서는 숨긴다 — 돌아갈 곳이 앱 바깥밖에 없다
-    const home = this.state.view === 'landing';
-    b.style.display = home ? 'none' : '';
   },
 });
 
@@ -1727,6 +1779,7 @@ Component.prototype._syncReport = function () {
     this.loadMyReports(s.employeeId || s.memberEmpId);
     this.unclipNotices();
     this.paintToc();
+    this.hideMemberAvatar();
   }
 
   if (s.view === 'admin' && s.subTab === 'insight') {
