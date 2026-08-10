@@ -231,6 +231,12 @@ em.em-key-concept{font-style:normal;font-weight:700;background:#FBEDBE;
 .fixcard .note{padding:12px 20px;font-size:13.5px;color:var(--ink-2);
   border-top:1px solid var(--line);line-height:1.7;background:var(--paper)}
 .fixcard .note b{color:var(--sk-red-deep);font-weight:700;margin-right:4px}
+/* 원어 표현의 뜻 — 원문 아래, 원문보다 작게 */
+.fixcard .ko{margin-top:7px;font-size:13px;line-height:1.6;font-weight:400;
+  color:var(--ink-2);word-break:keep-all}
+.fixcard .side.x .ko{color:var(--muted)}
+.fixcard .ko::before{content:'뜻 ';font-size:11px;font-weight:700;
+  color:var(--muted);letter-spacing:.02em}
 /* 줄임말 풀이 — 배울 문구보다 눈에 띄면 안 된다 */
 .fixcard .gloss{padding:10px 20px;border-top:1px solid var(--line);
   background:var(--paper);display:flex;flex-wrap:wrap;gap:6px 18px}
@@ -641,12 +647,20 @@ def _fixnotes(s: dict) -> str:
                 f'<span class="gt"><b>{esc(t["term"])}</b>'
                 f'{esc(t["meaning"])}</span>' for t in c["terms"])
             terms = f'<div class="gloss">{items}</div>'
+        # 영어 표현은 원어로 둔다 — 말하라고 가르친 문장이라 바꾸면 수업이
+        # 사라진다. 대신 뜻을 바로 아래 적는다. 영어가 익숙하지 않은 사람은
+        # 뜻이 없으면 무엇을 외우라는 것인지 알 수 없다.
+        def ko(v):
+            return f'<div class="ko">{esc(v)}</div>' if v else ""
+
         out.append(
             f'<div class="fixcard"><div class="row">'
             f'<div class="side {left_cls}"><div class="tagline">{left_label}</div>'
-            f'<div class="txt">{c.get("leftHtml") or esc(c.get("left"))}</div></div>'
+            f'<div class="txt">{c.get("leftHtml") or esc(c.get("left"))}</div>'
+            f'{ko(c.get("leftKo"))}</div>'
             f'<div class="side o"><div class="tagline">{esc(c.get("rightLabel") or "✓ 이렇게")}</div>'
-            f'<div class="txt">{c.get("rightHtml") or esc(c.get("right"))}</div></div>'
+            f'<div class="txt">{c.get("rightHtml") or esc(c.get("right"))}</div>'
+            f'{ko(c.get("rightKo"))}</div>'
             f'</div>{terms}{note}</div>')
     return f'<div class="fixgrid">{"".join(out)}</div>'
 

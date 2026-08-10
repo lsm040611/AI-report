@@ -624,6 +624,9 @@ def _fixnotes(card: dict) -> dict:
         plain = " ".join((r.get("text") or "") for r in runs
                          if not r.get("emphasis")).strip()
         plain = re.sub(r"\s+", " ", plain)
+        # 원어로 남긴 표현의 뜻 (R-13 이 번역과 함께 받아 온다).
+        # 문장은 원어로 둬야 외울 수 있고, 뜻은 옆에 있어야 쓸 수 있다.
+        ko = nar.get("preserve_ko") or {}
 
         for i, r in enumerate(runs):
             if r.get("emphasis") != "issue_expression":
@@ -637,6 +640,8 @@ def _fixnotes(card: dict) -> dict:
             why = plain[:150].strip(" —→-") or None
             cards.append({
                 "left": left, "right": right, "why": why,
+                "leftKo": ko.get(left) or None,
+                "rightKo": ko.get(right) or None,
                 # "one-pager로 수치 정리" 처럼 한국어 안에 섞인 줄임말은
                 # 뜻을 모르면 무엇을 하라는 것인지 알 수 없다. 풀이를 붙인다.
                 # 통째로 영어인 교정 표현은 말하라고 가르친 문장이라 건드리지

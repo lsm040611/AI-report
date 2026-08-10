@@ -308,6 +308,16 @@ def _apply_translation(data: dict, payload: dict, result: dict) -> None:
         if (label and nar.get("original_label") == label) or (source and joined == source):
             nar["translation_ko"] = text
             nar["translation_engine"] = result.get("engine")
+            # 원어로 남긴 표현들의 뜻. 교정 노트가 이것을 옆에 적는다.
+            # 준 목록에 없는 것이 섞여 오면 버린다 — 지어낸 것이다.
+            keep = {s.strip() for s in (payload.get("preserve_verbatim") or [])}
+            gloss = {}
+            for g in (result.get("glossary") or []):
+                src, ko = (g.get("source") or "").strip(), (g.get("ko") or "").strip()
+                if src in keep and ko:
+                    gloss[src] = ko
+            if gloss:
+                nar["preserve_ko"] = gloss
             return
 
 

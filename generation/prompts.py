@@ -55,6 +55,52 @@ OUTPUT_SCHEMA = {
 }
 
 
+# R-13 은 번역문 말고 하나를 더 받아 온다 — 원어로 남겨 둔 표현들의 뜻이다.
+#
+# 원어 보존은 옳다. "We may need to adjust our pricing" 은 말하라고 가르친
+# 문장이라 한국어로 바꾸면 수업이 사라진다. 그런데 그대로만 두면 영어를
+# 잘 못하는 사람은 무엇을 외우라는 것인지 모른 채 카드만 본다.
+#
+# **문장은 원어로 두고, 뜻은 옆에 적는다.** 같은 호출에서 함께 받으므로
+# API 를 한 번 더 부르지 않는다.
+TRANSLATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string", "description": "리포트에 실릴 한국어 번역문."},
+        "glossary": {
+            "type": "array",
+            "description": "원어로 남긴 표현마다 하나씩. 남긴 것이 없으면 빈 배열.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string",
+                               "description": "원어로 남긴 표현 (준 것과 글자까지 같아야 한다)"},
+                    "ko": {"type": "string",
+                           "description": "그 표현의 한국어 뜻. 한 줄, 40자 이내."},
+                },
+                "required": ["source", "ko"],
+                "additionalProperties": False,
+            },
+        },
+        "evidence": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "quote": {"type": "string",
+                              "description": "제공된 원문에서 글자 그대로 옮긴 구절"},
+                    "why": {"type": "string", "description": "근거가 되는 이유 한 줄"},
+                },
+                "required": ["quote", "why"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["text", "glossary", "evidence"],
+    "additionalProperties": False,
+}
+
+
 # 암기 문장 카드는 문장 하나로 끝나지 않는다 — 어느 교정 표현에서 나온
 # 조각인지, 마무리 문장은 무엇인지가 함께 와야 카드가 완성된다.
 MEMORIZE_SCHEMA = {
@@ -115,7 +161,7 @@ def build(task: str, payload: dict) -> Tuple[str, str, dict]:
     if task == "rewrite_neutral_third_person":
         return "R-11 익명 재작성", _r11(payload), OUTPUT_SCHEMA
     if task == "translate_en_to_ko":
-        return "R-13 번역", _r13(payload), OUTPUT_SCHEMA
+        return "R-13 번역", _r13(payload), TRANSLATE_SCHEMA
     if task == "curate_memorize":
         return "R-17 암기 문장", _r17_memorize(payload), MEMORIZE_SCHEMA
     if task == "curate_gap_comment":
@@ -229,8 +275,19 @@ def _r13(p: dict) -> str:
 원어를 그대로 두어야 하는 구간 (학습 대상 표현이므로 번역하지 않습니다):
 {keep_txt}
 
-할 일: 자연스러운 한국어 존댓말로 번역하되, 위 구간은 영어 원문 그대로 남깁니다.
-전문 용어는 억지로 옮기지 않습니다.
+할 일 두 가지입니다.
+
+1. `text` — 자연스러운 한국어 존댓말로 번역하되, 위 구간은 영어 원문 그대로
+   남깁니다. 전문 용어는 억지로 옮기지 않습니다.
+
+2. `glossary` — **위에 적힌 구간 하나하나의 뜻**을 한국어로 적습니다.
+   원어로 남기는 이유는 그것이 배울 표현이기 때문이지, 뜻을 감추려는 것이
+   아닙니다. 영어가 익숙하지 않은 사람은 무엇을 외우라는 것인지 모른 채
+   카드만 보게 됩니다.
+   - `source` 는 위 목록의 표현을 **글자 그대로** 옮깁니다 (따옴표까지).
+   - `ko` 는 그 표현의 뜻을 한 줄로, 40자 이내로 적습니다.
+     말할 문장이면 그 문장의 뜻을, 용어면 무엇을 가리키는 말인지 적습니다.
+   - 위 목록이 "(없음)" 이면 빈 배열을 주십시오.
 
 evidence 에는 번역의 근거가 된 영어 원문 구절을 글자 그대로 넣으십시오."""
 
