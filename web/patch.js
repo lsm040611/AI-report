@@ -1173,6 +1173,22 @@ function bars(host, items) {
   }).join('');
 }
 
+// 막대 칸의 값만 지운다. 눈금(1차·2차·3차, 60-70…)은 이미 그려진 것에서
+// 읽어 와 그대로 다시 세운다 — 눈금까지 지우면 그 칸이 무엇을 보여 주는
+// 자리인지 알 수 없다. 라벨 모양은 bars() 가 만든 '값 · 눈금' 이다.
+function blankBars(host) {
+  if (!host) return;
+  const spans = host.querySelectorAll('span');
+  const labels = [];
+  for (let i = 0; i < spans.length; i++) {
+    const t = (spans[i].textContent || '').trim();
+    const at = t.indexOf('·');
+    labels.push(at >= 0 ? t.slice(at + 1).trim() : t);
+  }
+  if (!labels.length) return;
+  bars(host, labels.map((l) => ({ label: l, value: null })));
+}
+
 function rows(host, items) {
   if (!host) return;
   host.innerHTML = items.length ? items.map((x) =>
@@ -1605,11 +1621,10 @@ Object.assign(Component.prototype, {
   },
 
   blankInsight() {
-    const EMPTY = '아직 올린 평가지가 없습니다.';
     // 화면이 다시 그려지면 예시 숫자도 되살아난다. 그래서 매번 확인하되,
     // 이미 비어 있으면 손대지 않는다 — 매번 다시 쓰면 화면이 깜빡인다.
-    const done = findCard('점수 분포');
-    if (done && done.textContent.indexOf(EMPTY) >= 0) return;
+    const done = findCard('요약');
+    if (done && done.textContent.indexOf('평가지를 올리면') >= 0) return;
 
     // 지표 넷은 마크업에 87.0 · 96% · 82% 로 박혀 있다. 그럴듯한 숫자라
     // 아무것도 안 올린 화면에서도 진짜처럼 읽힌다.
@@ -1617,19 +1632,23 @@ Object.assign(Component.prototype, {
       const m = findMetric(label);
       if (m && m.children.length === 0) m.textContent = '—';
     });
+    // 막대 칸도 **가로축은 남기고 값만 지운다.** 1차·2차·3차, 60-70 같은
+    // 눈금은 그 칸이 무엇을 보여 주는 자리인지 말해 주는 정보다.
     ['회차별 평균 추이', '점수 분포', '시행 회차 추이'].forEach((title) => {
-      const host = findCard(title);
-      if (host) {
-        host.innerHTML = '<div style="color:var(--muted-fg);font-size:12.5px">'
-          + EMPTY + '</div>';
-      }
+      blankBars(findCard(title));
     });
-    rows(findCard('관계별 결과'), []);
-    rows(findCard('항목별 이번 회차 vs 과정 평균'), []);
+    // 관계별 결과는 왼쪽이 관계 이름(본인·동료·상사)이라 남기고 값만 지운다
+    const rel = findCard('관계별 결과');
+    if (rel) {
+      const labels = Array.prototype.map.call(
+        rel.querySelectorAll('span:first-child'), (n) => n.textContent.trim())
+        .filter(Boolean);
+      if (labels.length) rows(rel, labels.map((l) => ({ left: l, right: '—' })));
+    }
     const sum = findCard('요약');
     if (sum) {
       sum.innerHTML = '<span style="color:var(--muted-fg)">'
-        + '평가지를 올리면 여기에 요약이 나옵니다.</span>';
+        + '평균 — 점 · 인원 — 명<br>평가지를 올리면 여기에 요약이 나옵니다.</span>';
     }
     const all = document.querySelectorAll('div');
     for (let i = 0; i < all.length; i++) {
@@ -2157,9 +2176,13 @@ Component.prototype.renderVals = function () {
       label: a.area, thisRound: a.latest, avg: a.courseAverage,
     }));
   } else {
-    // 올린 것이 없어도 프로토타입의 예시 셋(갈등 조정 91 · 의사 결정 84 ·
-    // 피드백 전달 79)이 그대로 떴다. 그럴듯한 숫자라 진짜로 읽힌다.
-    props.accItemComparison = [];
+    // 올린 것이 없어도 예시 숫자가 떴다 — 갈등 조정 91 · 의사 결정 84 ·
+    // 피드백 전달 79. 그럴듯해서 진짜로 읽힌다.
+    //
+    // **항목은 남기고 숫자만 지운다.** 항목까지 없애면 칸이 통째로 비어,
+    // 여기에 무엇이 들어올 자리인지 알 수 없다.
+    props.accItemComparison = (props.accItemComparison || [])
+      .map((x) => ({ ...x, thisRound: '—', avg: '—' }));
   }
 
   // 발송 전 수신자 표 — 원래 함수는 사번으로 주소를 지어낸다
