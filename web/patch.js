@@ -1592,6 +1592,18 @@ Object.assign(Component.prototype, {
   //
   // 칸(디자인)은 그대로 두고 값만 비운다 — 칸까지 없애면 무엇이 들어올
   // 자리인지 알 수 없다.
+  // 유형 탭('리더십 진단') 옆의 과정 고르는 상자. 고를 과정이 없으면
+  // 200×44 짜리 빈 네모만 남는다 — 눌러도 아무것도 안 나오는 칸이다.
+  // 과정이 생기면 다시 보여야 하므로 지우지 않고 감춘다.
+  toggleCourseSelect(hasCourses) {
+    const sel = document.querySelector(
+      '[data-responsive] select, .SKHRDesignSystem_ed0920-Select, select');
+    const box = sel ? (sel.closest('x-import') || sel) : null;
+    if (!box) return;
+    const want = hasCourses ? '' : 'none';
+    if (box.style.display !== want) box.style.display = want;
+  },
+
   blankInsight() {
     const EMPTY = '아직 올린 평가지가 없습니다.';
     // 화면이 다시 그려지면 예시 숫자도 되살아난다. 그래서 매번 확인하되,
@@ -1631,9 +1643,11 @@ Object.assign(Component.prototype, {
 
   paintInsight() {
     const d = this.state.engineInsight;
+    const has = !!(this.state.engineCourses || []).length;
+    this.toggleCourseSelect(has);
     if (!d) {
       // 고를 과정이 하나도 없다 = 올린 것이 없다. 예시 숫자를 지운다.
-      if (!(this.state.engineCourses || []).length) this.blankInsight();
+      if (!has) this.blankInsight();
       return;
     }
     const stamp = d.courseId + ':' + d.kind;
@@ -2135,12 +2149,16 @@ Component.prototype.renderVals = function () {
     props.insightCourseOptions = s.engineCourses
       .filter((c) => !c.sourceType || c.sourceType === uiType)
       .map((c) => ({ value: c.courseId, label: c.title }));
+  } else {
+    props.insightCourseOptions = [];
   }
   if (s.engineInsight && s.engineInsight.kind === '누적교육') {
     props.accItemComparison = (s.engineInsight.areas || []).map((a) => ({
       label: a.area, thisRound: a.latest, avg: a.courseAverage,
     }));
-  } else if (s.engineInsight) {
+  } else {
+    // 올린 것이 없어도 프로토타입의 예시 셋(갈등 조정 91 · 의사 결정 84 ·
+    // 피드백 전달 79)이 그대로 떴다. 그럴듯한 숫자라 진짜로 읽힌다.
     props.accItemComparison = [];
   }
 
