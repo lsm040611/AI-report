@@ -133,6 +133,9 @@ def to_presentation_card(card: dict,
     return {
         "person": {"name": person.get("name"), "alias": person.get("alias"),
                    "position": person.get("position"),
+                   # 사번을 머리말에 적는다. 같은 이름이 둘일 때 이 리포트가
+                   # 누구 것인지 종이 위에서 가릴 수 있는 유일한 값이다.
+                   "empId": person.get("person_id"),
                    "team": person.get("팀") or person.get("부서")},
         "meta": {
             "eyebrow": EYEBROW.get(stype, "개인 피드백 리포트"),

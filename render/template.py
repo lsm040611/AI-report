@@ -60,7 +60,13 @@ body{font-family:var(--sans);background:var(--page);color:var(--ink);
 .masthead h1{font-size:42px;font-weight:800;letter-spacing:-.035em;margin:14px 0 6px;
   line-height:1.1;color:var(--ink)}
 .masthead h1 .alias{font-size:19px;font-weight:500;color:var(--faint);margin-left:11px;letter-spacing:0}
-.masthead .where{font-size:13.5px;color:var(--muted);margin:0 0 4px}
+.masthead .where{font-size:13.5px;color:var(--muted);margin:0 0 4px;
+  display:flex;flex-wrap:wrap;align-items:center;gap:0 9px}
+/* 소속 · 직급 · 사번 사이의 가운뎃점. 글자로 넣으면 하나가 비었을 때
+   점만 덩그러니 남는다 — 앞에 무엇이 있을 때만 그린다. */
+.masthead .where span + span::before{content:'·';margin-right:9px;color:var(--line)}
+.masthead .where .eid{font-family:var(--mono);font-size:12.5px;
+  letter-spacing:.02em;color:var(--faint)}
 .masthead .prog{font-size:16.5px;font-weight:600;color:var(--ink-2)}
 .metastrip{background:var(--paper);border-top:1px solid var(--line);
   border-bottom:1px solid var(--line);padding:13px 46px;display:flex;flex-wrap:wrap;gap:6px 0}
@@ -907,7 +913,17 @@ def render_masthead(card: dict) -> str:
     else:
         title = f'{esc(name)} 님'
 
-    where = f'<div class="where">{esc(p["team"])}</div>' if p.get("team") else ""
+    # 소속 · 직급 · 사번. 같은 이름이 둘일 때 이 리포트가 누구 것인지
+    # 종이 위에서 가릴 수 있는 것은 사번뿐이다. 제목의 '대리님' 은 호칭이라
+    # 직급을 한 번 더 또박또박 적어 둔다 — 인쇄해서 돌릴 때 필요하다.
+    bits = []
+    if p.get("team"):
+        bits.append(f'<span>{esc(p["team"])}</span>')
+    if p.get("position"):
+        bits.append(f'<span>{esc(p["position"])}</span>')
+    if p.get("empId"):
+        bits.append(f'<span class="eid">{esc(p["empId"])}</span>')
+    where = f'<div class="where">{"".join(bits)}</div>' if bits else ""
     return (f'<div class="masthead">{eyebrow}'
             f'<h1>{title}{alias}</h1>{where}{prog}</div>{strip}')
 
