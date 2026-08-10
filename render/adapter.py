@@ -185,6 +185,14 @@ def _glance(card: dict, stype: str, scale: dict, peer_n: Optional[int],
     lines = []
     if areas:
         lines.append(f"{len(areas)}개 {'문항' if card.get('direction') == 'aggregated_responses' else '역량'} 평균")
+    # 총점은 항목을 더한 값이고, 만점도 항목마다의 만점을 더한 값이다.
+    # 어딘가에 100 을 적어 두고 그것으로 재면 항목이 몇 개든 늘 100점 만점이
+    # 되어, 실제로 전원이 100점으로 보였다.
+    if summary.get("total") is not None and summary.get("total_max"):
+        pct = summary.get("percent")
+        lines.append(f'총점 <b>{_num(summary["total"], scale)}</b>'
+                     f'/{_num(summary["total_max"], scale)}'
+                     + (f" ({pct:g}%)" if pct is not None else ""))
     agg = card.get("aggregation") or {}
     if agg.get("n_respondents"):
         lines.append(f'응답 <b>{agg["n_respondents"]}건</b>')

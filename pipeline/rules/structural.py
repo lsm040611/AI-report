@@ -79,7 +79,8 @@ def r02_cast_scores(card: dict, ctx: RuleContext) -> None:
       "평균이 수식과 하드코딩으로 뒤섞임",
       "평균은 항상 엔진이 다시 계산한다. 원본과 0.05 넘게 다르면 review 플래그")
 def r03_recompute_average(card: dict, ctx: RuleContext) -> None:
-    values = [s["score"] for s in card.get("scores", []) if s.get("score") is not None]
+    scored = [s for s in card.get("scores", []) if s.get("score") is not None]
+    values = [s["score"] for s in scored]
     if not values:
         return
     computed = round(sum(values) / len(values), 2)
@@ -88,6 +89,23 @@ def r03_recompute_average(card: dict, ctx: RuleContext) -> None:
 
     summary["average"] = computed
     summary["n_areas"] = len(values)
+
+    # 총점은 **항목을 더해서** 낸다. 만점도 항목마다의 만점을 더한 값이다.
+    # 어딘가에 100 을 적어 두고 그것으로 재면, 항목이 셋이든 열이든 늘
+    # 100점 만점이 되어 버린다 — 실제로 그래서 전원이 100점으로 보였다.
+    # 항목 수가 사람마다 달라도(결측이 있어도) 그 사람의 만점이 따라 준다.
+    tops = []
+    for s in scored:
+        top = (s.get("scale") or {}).get("max")
+        if top is None:
+            top = (summary.get("scale") or {}).get("max")
+        if top is not None:
+            tops.append(float(top))
+    summary["total"] = _tidy(sum(values))
+    if len(tops) == len(values) and tops:
+        summary["total_max"] = _tidy(sum(tops))
+        summary["percent"] = (round(sum(values) / sum(tops) * 100, 1)
+                              if sum(tops) else None)
 
     if original is None:
         # R-03b : 평균란 자체가 없는 양식(특강)
@@ -123,13 +141,45 @@ def r04_attach_scale(card: dict, ctx: RuleContext) -> None:
     card.setdefault("score_summary", {})["scale"] = dict(known[0] if known else fallback)
 
 
+def _tidy(v: float):
+    """300.0 이 아니라 300 으로. 딱 떨어지는 수에 소수점이 붙으면
+    사람이 '왜 소수지' 하고 한 번 멈춘다."""
+    v = round(v, 2)
+    return int(v) if float(v).is_integer() else v
+
+
+# 실무에서 쓰이는 척도의 위 끝. 값이 들어가는 가장 작은 것을 고른다.
+SCALE_TOPS = (5, 7, 10, 20, 100)
+
+
 def _infer_scale(scores) -> dict:
+    """값에서 척도를 읽는다. 라벨에 '100점 만점' 같은 말이 없을 때의 마지막 수단.
+
+    예전에는 '5 보다 크면 10점 만점' 둘 중 하나로만 갈랐다. 그래서 88·92·85
+    같은 100점 만점 점수가 10점 만점으로 재어졌다 — 88점이 880% 가 되고,
+    화면에서는 그게 100 으로 잘려서 **전원이 100점**으로 보였다.
+
+    위 끝을 하나로 단정하지 않고, 실제 값이 들어가는 가장 작은 척도를
+    고른다. 값보다 작은 척도는 있을 수 없고, 필요 이상으로 큰 척도를
+    고르면 모두가 낮은 점수로 보이기 때문이다.
+    """
     vals = [s["score"] for s in scores if s.get("score") is not None]
-    if vals and max(vals) > 5:
-        return {"min": 1, "max": 10, "step": 1}
+    if not vals:
+        return {"min": 1, "max": 5, "step": 1}
+
+    top = max(vals)
+    hi = next((t for t in SCALE_TOPS if top <= t), None)
+    if hi is None:
+        # 100 도 넘는다면 우리가 아는 척도가 아니다. 값을 그대로 살린다 —
+        # 임의로 100 에 맞추면 120점짜리가 100점으로 잘린다.
+        hi = int(top) if float(top).is_integer() else top
+
+    # 0 이 있으면 0부터 시작하는 척도다 (0~100 처럼). 없으면 1부터.
+    lo = 0 if min(vals) < 1 else 1
+
     has_half = any(abs(v * 2 - round(v * 2)) < 1e-9 and abs(v - round(v)) > 1e-9
                    for v in vals)
-    return {"min": 1, "max": 5, "step": 0.5 if has_half else 1}
+    return {"min": lo, "max": hi, "step": 0.5 if has_half else 1}
 
 
 def to_ratio(score: Optional[float], scale: dict) -> Optional[float]:
