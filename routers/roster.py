@@ -114,6 +114,67 @@ def load_csv(db: Session, raw: bytes, replace: bool = True,
             "columns": {k: v for k, v in mapping.items()}}
 
 
+# 자동 등록 사번의 앞글자. uploads 쪽 _autoregister 와 같은 값을 쓴다.
+PROVISIONAL = "P"
+
+COLUMN_ORDER = ["employee_id", "name_ko", "alias_en", "email", "division",
+                "team", "position", "employment_status", "hire_date",
+                "manager_id", "location", "note"]
+
+
+def _cells(r: RosterEntry) -> list:
+    return [r.person_id, r.name, r.alias or "", r.email or "",
+            r.department or "", r.team or "", r.position or "",
+            r.status or "active", "", r.manager_id or "", "", r.note or ""]
+
+
+# CSV 옆에 엑셀본도 둔다. 담당자는 CSV 를 잘 안 열고, 열어도 엑셀이 사번의
+# 앞 0 을 지우거나 한글을 깨뜨린다. 자동 등록된 사람의 사번을 확인하려고
+# 파일을 여는 것이므로, 여는 순간 제대로 보여야 한다.
+SEED_XLSX = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "seed", "employees.xlsx")
+
+
+def write_seed_xlsx(db: Session) -> int:
+    """명부 전체를 seed/employees.xlsx 로 다시 쓴다.
+
+    덧붙이지 않고 통째로 다시 쓴다 — DB 가 언제나 옳고, 그래야 파일이
+    어긋날 일이 없다. 쓸 수 없는 환경이면 조용히 넘어간다.
+    """
+    if os.getenv("HR_ROSTER_SEED_WRITE", "1").strip().lower() in ("0", "false", "no"):
+        return 0
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill
+    except ImportError:
+        return 0
+    try:
+        rows = db.query(RosterEntry).order_by(RosterEntry.person_id).all()
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "사원명단"
+        ws.append(COLUMN_ORDER)
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill("solid", fgColor="F0F0F2")
+        auto = Font(color="A80020")
+        for r in rows:
+            ws.append(_cells(r))
+            if (r.person_id or "").startswith(PROVISIONAL):
+                for cell in ws[ws.max_row]:      # 자동 등록은 눈에 띄게
+                    cell.font = auto
+        for col, width in zip("ABCDEFGHIJKL",
+                              (12, 10, 10, 26, 16, 14, 8, 10, 12, 10, 10, 40)):
+            ws.column_dimensions[col].width = width
+        ws.freeze_panes = "A2"
+        wb.save(SEED_XLSX)
+        return len(rows)
+    except OSError as exc:
+        print(f"[명부] 엑셀본을 쓰지 못했습니다 — {exc}")
+        return 0
+
+
 def append_to_seed(entries) -> int:
     """자동 등록한 사람을 seed/employees.csv 에도 적어 둔다.
 
@@ -132,9 +193,7 @@ def append_to_seed(entries) -> int:
     if not rows or not os.path.exists(SEED_CSV):
         return 0
 
-    order = ["employee_id", "name_ko", "alias_en", "email", "division", "team",
-             "position", "employment_status", "hire_date", "manager_id",
-             "location", "note"]
+    order = COLUMN_ORDER
     field = {"employee_id": "person_id", "name_ko": "name", "alias_en": "alias",
              "email": "email", "division": "department", "team": "team",
              "position": "position", "employment_status": "status",
@@ -321,6 +380,23 @@ def export_csv(db: Session = Depends(get_db)):
                              'attachment; filename="employees.csv"'})
 
 
+@router.get("/export.xlsx")
+def export_xlsx(db: Session = Depends(get_db)):
+    """명부를 엑셀로 내려받는다. 자동 등록된 사람은 붉은 글씨로 표시된다."""
+    from fastapi.responses import Response
+    n = write_seed_xlsx(db)
+    if not n or not os.path.exists(SEED_XLSX):
+        raise HTTPException(503, "엑셀본을 만들지 못했습니다 — /roster/export "
+                                 "로 CSV 를 받아 주십시오")
+    with open(SEED_XLSX, "rb") as fh:
+        body = fh.read()
+    return Response(
+        body,
+        media_type="application/vnd.openxmlformats-officedocument"
+                   ".spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="employees.xlsx"'})
+
+
 @router.get("/summary")
 def summary(db: Session = Depends(get_db)):
     """명부가 들어와 있는지, 몇 명이 발송 가능한지."""
@@ -337,6 +413,12 @@ def summary(db: Session = Depends(get_db)):
         "dispatchable": len(rows) - len(excluded),
         "excluded": excluded,
         "duplicate_names": {k: v for k, v in dupes.items() if len(v) > 1},
+        # 평가지에서 자동으로 넣은 사람. 구성원으로 들어가 확인하려면
+        # 사번이 필요한데, 이 사번은 우리가 지어낸 것이라 아무도 모른다.
+        "auto_registered": [
+            {"person_id": r.person_id, "name": r.name,
+             "has_email": bool(r.email)}
+            for r in rows if (r.person_id or "").startswith(PROVISIONAL)],
     }
 
 
@@ -401,12 +483,35 @@ pre{background:var(--pearl);border:1px solid var(--line);padding:12px;
 <button id=rst class=ghost type=button>기본 명부로 되돌리기</button>
 
 <div id=out></div>
+<h2>평가지에서 자동으로 들어온 사람</h2>
+<p class=m style="margin-bottom:10px">명부에 없던 이름은 임시 사번을 받아
+자동으로 들어옵니다. <b>구성원으로 로그인해서 확인하실 때 이 사번을 쓰십시오.</b><br>
+메일 주소는 지어내지 않으므로 발송은 막혀 있습니다 — 주소를 채우면 열립니다.</p>
+<div id=auto>불러오는 중…</div>
+
 <div class=foot>
   <a href="/">← 처음으로</a><a href="/list">만들어진 리포트</a>
-  <a href="/roster/summary">지금 상태(JSON)</a></div>
+  <a href="/roster/export.xlsx">엑셀로 받기</a>
+  <a href="/roster/export">CSV로 받기</a></div>
 </div><script>
 const f=document.getElementById('f'),out=document.getElementById('out');
 const rst=document.getElementById('rst');
+
+// 자동으로 들어온 사람의 사번. 우리가 지어낸 값이라 여기서 안 알려 주면
+// 구성원으로 들어가 확인할 방법이 없다.
+async function paintAuto(){
+  const box=document.getElementById('auto');
+  let s;
+  try{ s=await (await fetch('/roster/summary')).json(); }
+  catch(e){ box.textContent='명부 상태를 읽지 못했습니다.'; return; }
+  const list=s.auto_registered||[];
+  if(!list.length){ box.innerHTML='<p class=m>아직 없습니다.</p>'; return; }
+  box.innerHTML='<table><tr><th>사번</th><th>이름</th><th>메일</th></tr>'+
+    list.map(x=>'<tr><td><b>'+x.person_id+'</b></td><td>'+x.name+'</td><td>'+
+      (x.has_email?'있음':'<span class=warn>없음 — 발송 막힘</span>')+
+      '</td></tr>').join('')+'</table>';
+}
+paintAuto();
 rst.onclick=async()=>{
   if(!confirm('명부를 기본 파일과 똑같이 맞춥니다.\\n'+
               '화면에서 고쳐 두신 것이 있으면 사라집니다. 진행할까요?')) return;

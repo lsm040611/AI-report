@@ -807,6 +807,7 @@ def _autoregister(db: Session, cards: List[dict]) -> List[dict]:
         print(f"[명부] 평가지에서 {len(made)}명을 자동 등록했습니다 — "
               + ", ".join(f"{x['name']}({x['person_id']})" for x in made))
         roster_mod.append_to_seed(list(fresh.values()))
+        roster_mod.write_seed_xlsx(db)     # 담당자가 열어 보는 것은 엑셀본이다
     return made
 
 
