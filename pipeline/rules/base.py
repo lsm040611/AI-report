@@ -174,6 +174,9 @@ DISPATCH_ONLY_HOLDS = {
     "person_not_in_roster",
     "ambiguous_person",
     "non_regular_participant",
+    # 평가지 사번과 명부 이름이 다르다. 리포트 내용은 멀쩡하니 만들어 두고,
+    # 누구에게 보낼지는 담당자가 보고 정한다.
+    "empid_name_mismatch",
 }
 
 

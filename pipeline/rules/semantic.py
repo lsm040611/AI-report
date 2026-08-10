@@ -117,9 +117,34 @@ def r15_resolve_person(card: dict, ctx: RuleContext) -> None:
     name, alias = person.get("name"), person.get("alias")
     ctxd = card.get("context", {})
 
+    # 사번을 **제일 먼저** 본다. 이름은 겹치지만 사번은 안 겹치므로, 사번이
+    # 있으면 동명이인 문제 자체가 생기지 않는다.
+    #
+    # 다만 예전에는 사번만 적어 두고 여기서 끝냈다. 그래서 평가지에 사번이
+    # 있는 경우가 오히려 손해였다 — 명부를 안 보니 직급·메일이 안 붙어서
+    # 리포트가 "최건우 님" 이 되고 발송도 막혔다. 사번으로 명부를 조회해서
+    # 나머지를 채운다.
     if person.get("person_id"):
-        # 평가지 이름 칸에 사번이 함께 적혀 있던 경우 — 이미 신원 키가 있다
-        mark_applied(card, "R-15", "원본 사번 사용")
+        pid = str(person["person_id"]).strip().upper()
+        person["person_id"] = pid
+        entry = next((p for p in roster
+                      if str(p.get("person_id") or "").upper() == pid), None)
+        if entry:
+            # 이름이 다르면 사번 쪽을 믿되, 담당자가 볼 수 있게 남긴다.
+            # 손으로 옮겨 적다 한 글자 틀리면 남의 리포트가 된다.
+            if name and entry.get("name") and entry["name"] != name:
+                add_flag(card, "empid_name_mismatch", HOLD,
+                         detail=f"평가지 '{name}' ↔ 명부 '{entry['name']}' ({pid})",
+                         action="사번과 이름이 다릅니다 — 담당자 확인 필요")
+            _adopt(card, person, entry)
+            mark_applied(card, "R-15", "원본 사번으로 명부 조회")
+        elif roster:
+            add_flag(card, "person_not_in_roster", HOLD,
+                     detail=f"평가지 사번 {pid} 이 명부에 없습니다",
+                     action="명부 등록 또는 사번 수정 필요")
+            mark_applied(card, "R-15", "원본 사번 사용 (명부에 없음)")
+        else:
+            mark_applied(card, "R-15", "원본 사번 사용 (명부 없음)")
         return
 
     if not roster:

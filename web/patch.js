@@ -149,6 +149,7 @@ const FLAG_WHY = {
   non_regular_participant: '청강생입니다',
   ambiguous_person: '같은 이름이 명부에 둘 이상입니다',
   person_not_in_roster: '명부에 없는 사람입니다',
+  empid_name_mismatch: '평가지의 사번과 이름이 서로 다른 사람을 가리킵니다',
   anonymity_risk: '응답자가 적어 원문을 인용할 수 없습니다',
   roster_missing: '사원 명부가 아직 없습니다',
   no_email: '메일 주소가 없습니다',
@@ -163,6 +164,7 @@ const FLAG_FIX = {
   person_not_in_roster: '사원 명부에 넣고 다시 올리시면 풀립니다 (/roster/setup)',
   roster_missing: '사원 명부부터 넣어 주십시오 (/roster/setup)',
   no_email: '명부의 이메일 칸을 채워 주십시오 (/roster/setup)',
+  empid_name_mismatch: '아래에서 맞는 사번을 지정해 주십시오',
 };
 
 function flagText(f) {
@@ -969,7 +971,10 @@ Object.assign(Component.prototype, {
     const host = document.querySelector('[data-hr-hold]');
     const old = document.getElementById('hr-who');
     const ids = (flag && flag.candidates) || [];
-    if (!sel || !ids.length || !host) { if (old) old.remove(); return; }
+    // 후보가 있으면 고르게 하고, 없으면(명부에 아예 없거나 사번이 안 붙은
+    // 사람) 사번을 손으로 넣게 한다. 어느 쪽이든 신원을 확정하는 자리다.
+    const need = !!(sel && (ids.length || !sel.empId));
+    if (!need || !host) { if (old) old.remove(); return; }
 
     const stamp = sel.cardId + ':' + ids.join(',');
     if (old && old.dataset.stamp === stamp) return;
@@ -981,40 +986,107 @@ Object.assign(Component.prototype, {
     box.style.cssText = 'margin:10px 0 0;padding:12px 14px;border-radius:10px;'
       + 'background:#FFF6EE;border:1px solid #F6DCC4;font-size:13px;'
       + 'color:#8A4A12;line-height:1.6;word-break:keep-all';
-    box.innerHTML = '<b>' + esc(sel.rawName || sel.name) + '</b> 님은 명부에 '
-      + ids.length + '명입니다. 어느 분인지 골라 주세요 — '
-      + '<span style="opacity:.8">잘못 고르면 남의 평가서가 갑니다.</span>'
-      + '<div id=hr-who-list style="margin-top:9px">불러오는 중…</div>';
+    const who = esc(sel.rawName || sel.name);
+    box.innerHTML = (ids.length
+      ? '<b>' + who + '</b> 님은 명부에 ' + ids.length + '명입니다. '
+        + '어느 분인지 골라 주세요 — '
+        + '<span style="opacity:.8">잘못 고르면 남의 평가서가 갑니다.</span>'
+      : '<b>' + who + '</b> 님은 사번이 붙지 않았습니다. '
+        + '사번을 넣으면 직급·메일까지 따라옵니다.')
+      + '<div id=hr-who-list style="margin-top:9px"></div>';
     (host.closest('div') || host.parentNode).appendChild(box);
 
     const list = box.querySelector('#hr-who-list');
-    Promise.all(ids.map((id) =>
-      API.get('/roster?employee_id=' + encodeURIComponent(id))
-        .then((d) => (d.employees || [])[0]).catch(() => null)))
-      .then((rows) => {
-        const found = rows.filter(Boolean);
-        if (!found.length) {
-          list.textContent = '명부에서 후보를 불러오지 못했습니다.'; return;
-        }
-        list.innerHTML = '';
-        found.forEach((e) => {
-          const b = document.createElement('button');
-          b.type = 'button';
-          b.style.cssText = 'font:inherit;font-size:12.5px;font-weight:600;'
-            + 'background:#fff;color:#1B1B1D;border:1px solid #E4E4E7;'
-            + 'border-radius:999px;padding:7px 14px;margin:0 8px 8px 0;'
-            + 'cursor:pointer;text-align:left';
-          b.textContent = e.employee_id + ' · ' + (e.division || '')
-            + ' ' + (e.team || '') + ' ' + (e.position || '')
-            + (e.email ? '' : ' (메일 없음)');
-          b.onclick = () => {
-            b.disabled = true;
-            this.resolvePerson(sel.cardId, e.employee_id,
-                               e.name_ko + ' ' + (e.position || ''));
-          };
-          list.appendChild(b);
+    if (ids.length) {
+      list.textContent = '불러오는 중…';
+      Promise.all(ids.map((id) =>
+        API.get('/roster?employee_id=' + encodeURIComponent(id))
+          .then((d) => (d.employees || [])[0]).catch(() => null)))
+        .then((rows) => {
+          const found = rows.filter(Boolean);
+          list.innerHTML = '';
+          found.forEach((e) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.style.cssText = 'font:inherit;font-size:12.5px;font-weight:600;'
+              + 'background:#fff;color:#1B1B1D;border:1px solid #E4E4E7;'
+              + 'border-radius:999px;padding:7px 14px;margin:0 8px 8px 0;'
+              + 'cursor:pointer;text-align:left';
+            b.textContent = e.employee_id + ' · ' + (e.division || '')
+              + ' ' + (e.team || '') + ' ' + (e.position || '')
+              + (e.email ? '' : ' (메일 없음)');
+            b.onclick = () => {
+              b.disabled = true;
+              this.resolvePerson(sel.cardId, e.employee_id,
+                                 e.name_ko + ' ' + (e.position || ''));
+            };
+            list.appendChild(b);
+          });
+          if (!found.length) list.textContent = '명부에서 후보를 불러오지 못했습니다.';
+          list.appendChild(this._empIdField(sel));
         });
-      });
+    } else {
+      list.appendChild(this._empIdField(sel));
+    }
+  },
+
+  // 사번을 손으로 넣는 칸. 후보 단추로 안 되는 경우(명부에 없거나, 후보를
+  // 못 불러왔거나, 담당자가 사번을 이미 아는 경우)의 마지막 길이다.
+  _empIdField(sel) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'margin-top:6px;display:flex;gap:6px;'
+      + 'align-items:center;flex-wrap:wrap';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = '사번 직접 입력 (예: E3205)';
+    input.style.cssText = 'font:inherit;font-size:12.5px;padding:7px 12px;'
+      + 'border:1px solid #E4E4E7;border-radius:8px;width:190px;background:#fff';
+
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.textContent = '이 사번으로 지정';
+    go.style.cssText = 'font:inherit;font-size:12.5px;font-weight:600;'
+      + 'background:#EA002C;color:#fff;border:0;border-radius:999px;'
+      + 'padding:7px 14px;cursor:pointer';
+
+    const say = document.createElement('span');
+    say.style.cssText = 'font-size:12px;opacity:.85';
+
+    const submit = async () => {
+      const id = (input.value || '').trim().toUpperCase();
+      if (!id) { input.focus(); return; }
+      go.disabled = true;
+      say.textContent = '명부에서 확인하는 중…';
+      let e = null;
+      try {
+        const d = await API.get('/roster?employee_id=' + encodeURIComponent(id));
+        e = (d.employees || [])[0];
+      } catch (err) { /* 아래에서 없는 것으로 다룬다 */ }
+      if (!e) {
+        go.disabled = false;
+        say.textContent = '명부에 ' + id + ' 이(가) 없습니다.';
+        return;
+      }
+      // 이름이 다르면 되묻는다. 사번 한 글자 잘못 치면 남의 리포트가 된다.
+      const mine = sel.rawName || sel.name || '';
+      if (e.name_ko && mine && e.name_ko !== mine
+          && !confirm(id + ' 는 ' + e.name_ko + ' 님입니다.\n'
+                      + '화면의 ' + mine + ' 님과 다릅니다. 그래도 지정할까요?')) {
+        go.disabled = false;
+        say.textContent = '';
+        return;
+      }
+      this.resolvePerson(sel.cardId, e.employee_id,
+                         e.name_ko + ' ' + (e.position || ''));
+    };
+    go.onclick = submit;
+    input.onkeydown = (ev) => { if (ev.key === 'Enter') submit(); };
+
+    wrap.appendChild(input);
+    wrap.appendChild(go);
+    wrap.appendChild(say);
+    return wrap;
   },
 
   async resolvePerson(cardId, empId, label) {

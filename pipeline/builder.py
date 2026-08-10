@@ -258,7 +258,12 @@ def _note_text(row, schema: DetectedSchema) -> str:
 ALIAS_PAREN = re.compile(r"^(?P<name>.+?)\s*[（(]\s*(?P<extra>[^)）]{1,24})\s*[)）]\s*$")
 ALIAS_SLASH = re.compile(r"^(?P<name>[^/｜|]+?)\s*[/｜|]\s*(?P<extra>[^/｜|]{1,24})$")
 ALIAS_COMMA = re.compile(r"^(?P<name>[^,]+?)\s*,\s*(?P<extra>[^,]{1,24})$")
-ALIAS_FORMS = (ALIAS_PAREN, ALIAS_SLASH, ALIAS_COMMA)
+# 구분 기호 없이 '최건우 E3205' 라고만 적는 곳도 있다. 다만 여기서는
+# 영문 접두가 붙은 것만 사번으로 본다 — 공백 뒤 숫자만 있는 '김하늘 2021'
+# 까지 사번으로 삼으면 입사년도나 기수를 신원 키로 오인한다. 숫자만인
+# 사번은 괄호·슬래시처럼 "이건 따로다" 라는 표시가 있을 때만 인정한다.
+ALIAS_SPACE = re.compile(r"^(?P<name>.+?)\s+(?P<extra>[A-Za-z]{1,3}[-_]?\d{3,})$")
+ALIAS_FORMS = (ALIAS_PAREN, ALIAS_SLASH, ALIAS_COMMA, ALIAS_SPACE)
 
 # 사번처럼 보이는 것 — 영문 접두 + 숫자, 또는 숫자만
 EMP_ID = re.compile(r"^(?:[A-Za-z]{1,3}[-_]?\d{3,}|\d{4,})$")
