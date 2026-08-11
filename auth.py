@@ -47,16 +47,44 @@ def _is_local(request) -> bool:
 
 
 def _ok(header: str) -> bool:
-    """Basic 인증 헤더 대조. 글자 수로 정답을 짐작하지 못하게 상수 시간 비교."""
+    """Basic 인증 헤더 대조. 글자 수로 정답을 짐작하지 못하게 상수 시간 비교.
+
+    **바이트로 견준다.** 글자로 견주면 두 군데서 깨진다.
+
+    1. `hmac.compare_digest` 는 str 을 받을 때 ASCII 만 허용한다. 비밀번호에
+       한글이 한 자라도 있으면 TypeError 가 나고 500 이 된다 — 로그인 실패가
+       아니라 서버 오류로 보인다.
+    2. 브라우저마다 아이디·비밀번호를 다른 방식으로 싣는다. 크롬은 UTF-8,
+       사파리는 예전 규격대로 ISO-8859-1 로 보낸다. UTF-8 로만 풀면 사파리
+       사용자는 비밀번호가 맞아도 계속 다시 물어보는 화면을 본다.
+       그래서 두 방식으로 다 풀어 보고 하나라도 맞으면 통과시킨다.
+    """
     if not header.lower().startswith("basic "):
         return False
     try:
-        raw = base64.b64decode(header[6:].strip()).decode("utf-8")
+        raw = base64.b64decode(header[6:].strip())
     except Exception:                                  # noqa: BLE001
         return False
-    user, _, pw = raw.partition(":")
-    return (hmac.compare_digest(user, _user())
-            and hmac.compare_digest(pw, _password()))
+
+    want_user = _user().encode("utf-8")
+    want_pw = _password().encode("utf-8")
+
+    seen = []
+    seen.append(raw)                                   # 보낸 바이트 그대로
+    for enc in ("latin-1", "utf-8"):                   # 사파리 → 크롬 순
+        try:
+            seen.append(raw.decode(enc).encode("utf-8"))
+        except Exception:                              # noqa: BLE001
+            continue
+
+    for cand in seen:
+        user, sep, pw = cand.partition(b":")
+        if not sep:
+            continue
+        if (hmac.compare_digest(user, want_user)
+                and hmac.compare_digest(pw, want_pw)):
+            return True
+    return False
 
 
 class Gate(BaseHTTPMiddleware):
