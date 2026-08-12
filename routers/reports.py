@@ -19,6 +19,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 import mailer
@@ -392,11 +393,22 @@ def send_report(report_id: int, db: Session = Depends(get_db)):
     return {"report_id": report.id, "person": person.get("name"), **result}
 
 
-def _send_all(db: Session, upload_id: int, on_progress=None) -> dict:
-    """한 파일에서 나온 리포트를 사람마다 자기 주소로 보낸다."""
+def _send_all(db: Session, upload_id: int, on_progress=None,
+              only: Optional[List[int]] = None) -> dict:
+    """한 파일에서 나온 리포트를 사람마다 자기 주소로 보낸다.
+
+    `only` 에 카드 번호를 주면 **그 사람들에게만** 보낸다. 스무 명 중 셋만
+    다시 보내야 할 때가 있는데, 전체 발송밖에 없으면 열일곱 명이 같은 메일을
+    두 번 받는다.
+    """
     cards = db.query(Card).filter(Card.upload_id == upload_id).all()
     if not cards:
         raise HTTPException(404, "업로드 없음")
+    if only is not None:
+        want = {int(x) for x in only}
+        cards = [c for c in cards if c.id in want]
+        if not cards:
+            raise HTTPException(400, "고른 사람이 이 업로드에 없습니다")
 
     # 메일 서버에 닿는지 **한 번만** 먼저 본다.
     # 길이 막혀 있으면 사람마다 연결을 시도하다 하나씩 시간 초과가 난다 —
@@ -421,13 +433,13 @@ def _send_all(db: Session, upload_id: int, on_progress=None) -> dict:
         person = (card.card_json.get("person") or {})
         allowed, why = is_sendable(card.card_json)
         if report is None:
-            results.append({"person": person.get("name"), "sent": False,
-                            "reason": "리포트가 아직 없습니다"})
+            results.append({"cardId": card.id, "person": person.get("name"),
+                            "sent": False, "reason": "리포트가 아직 없습니다"})
         elif not allowed:
             # 건너뛴 것은 조용히 넘기지 않는다. 왜 안 갔는지 표에 남긴다.
-            results.append({"person": person.get("name"), "sent": False,
-                            "to": person.get("email"), "skipped": True,
-                            "reason": why})
+            results.append({"cardId": card.id, "person": person.get("name"),
+                            "sent": False, "to": person.get("email"),
+                            "skipped": True, "reason": why})
         else:
             try:
                 results.append(send_report(report.id, db))
@@ -453,7 +465,8 @@ class _SendJobs:
         self._state: Dict[int, dict] = {}
         self._lock = threading.Lock()
 
-    def start(self, upload_id: int, total: int = 0) -> None:
+    def start(self, upload_id: int, total: int = 0,
+              only: Optional[List[int]] = None) -> None:
         """총 몇 통인지 **시작할 때부터** 알려 준다.
 
         0/0 으로 시작하면 화면이 '몇 개 중 몇 개'인지 말하지 못하고, 막대도
@@ -463,9 +476,9 @@ class _SendJobs:
             if (self._state.get(upload_id) or {}).get("state") == "running":
                 return
             self._state[upload_id] = {"state": "running", "done": 0,
-                                      "total": total,
+                                      "total": total, "only": only,
                                       "startedAt": time.monotonic(), "error": None}
-        threading.Thread(target=self._run, args=(upload_id,),
+        threading.Thread(target=self._run, args=(upload_id, only),
                          daemon=True, name=f"send-{upload_id}").start()
 
     def _tick(self, upload_id: int, done: int, total: int) -> None:
@@ -474,12 +487,13 @@ class _SendJobs:
             if slot is not None:
                 slot["done"], slot["total"] = done, total
 
-    def _run(self, upload_id: int) -> None:
+    def _run(self, upload_id: int, only=None) -> None:
         from database import SessionLocal
         db = SessionLocal()
         try:
             out = _send_all(db, upload_id,
-                            lambda d, t: self._tick(upload_id, d, t))
+                            lambda d, t: self._tick(upload_id, d, t),
+                            only=only)
             with self._lock:
                 started = (self._state.get(upload_id) or {}).get("startedAt")
                 self._state[upload_id] = {
@@ -503,21 +517,43 @@ class _SendJobs:
 send_jobs = _SendJobs()
 
 
+class SendPick(BaseModel):
+    """누구에게 보낼지. 비우면 전원."""
+    cardIds: Optional[List[int]] = None
+
+
 @router.post("/send/upload/{upload_id}")
 def send_upload(upload_id: int, wait: bool = False,
+                body: Optional[SendPick] = None,
                 db: Session = Depends(get_db)):
     """발송을 시작한다. 기본은 뒤에서 돌리고 진행을 물어보게 한다.
 
+    본문에 `{"cardIds": [3, 7]}` 을 주면 **그 사람들에게만** 보낸다.
+    스무 명 중 셋만 다시 보내야 할 때, 전체 발송밖에 없으면 열일곱 명이
+    같은 메일을 두 번 받는다.
+
     `wait=1` 이면 다 보낼 때까지 기다렸다 결과를 준다 (스크립트·시험용).
     """
-    n = db.query(Card).filter(Card.upload_id == upload_id).count()
-    if not n:
+    ids = db.query(Card.id).filter(Card.upload_id == upload_id).all()
+    if not ids:
         raise HTTPException(404, "업로드 없음")
+    have = {i[0] for i in ids}
+
+    only = None
+    if body is not None and body.cardIds is not None:
+        only = [int(x) for x in body.cardIds]
+        unknown = [x for x in only if x not in have]
+        if unknown:
+            raise HTTPException(400, f"이 업로드에 없는 카드입니다 — {unknown}")
+        if not only:
+            raise HTTPException(400, "보낼 사람을 한 명 이상 골라 주십시오")
+
+    n = len(only) if only is not None else len(have)
     if wait:
-        return _send_all(db, upload_id)
-    send_jobs.start(upload_id, total=n)
+        return _send_all(db, upload_id, only=only)
+    send_jobs.start(upload_id, total=n, only=only)
     return {"upload_id": upload_id, "state": "running", "total": n,
-            "poll": f"/reports/send/status/{upload_id}",
+            "picked": only, "poll": f"/reports/send/status/{upload_id}",
             "mail": mailer.status()}
 
 

@@ -675,37 +675,62 @@ Object.assign(Component.prototype, {
   // 스타일 문자열이 아니라 **그려진 결과**로 찾는다. 마크업에는
   // `border-radius:var(--radius-circle)` 로 적혀 있지만, 화면에 올라갈 때
   // 값으로 치환되면 그 글자는 사라진다 — 문자열로 찾다가 못 찾았다.
-  hideMemberAvatar() {
-    const all = document.querySelectorAll('div');
+  // '신규' 배지가 씹혀서 나온다. 높이가 22px 로 박혀 있는데 한글은 라틴
+  // 글자보다 세로로 크고, 배지 컴포넌트가 그 높이에 맞춰 잘라 버린다.
+  // 표시 자체는 쓸모가 있으니 없애지 않고 **칸을 글자에 맞춘다.**
+  fixNewBadge() {
+    const all = document.body.querySelectorAll('div, span, x-import');
     for (let i = 0; i < all.length; i++) {
       const el = all[i];
-      if (el.children.length) continue;
+      if ((el.textContent || '').trim() !== '신규') continue;
+      if (el.dataset.hrBadge) continue;
+      el.dataset.hrBadge = '1';
+      el.style.height = 'auto';
+      el.style.minHeight = '0';
+      el.style.lineHeight = '1.35';
+      el.style.padding = '3px 9px';
+      el.style.whiteSpace = 'nowrap';
+      el.style.overflow = 'visible';
+      el.style.display = 'inline-flex';
+      el.style.alignItems = 'center';
+      el.style.flexShrink = '0';
+    }
+  },
+
+  hideMemberAvatar() {
+    // div 만 보다가 못 찾은 적이 있다. 태그를 가리지 않는다.
+    const all = document.body.querySelectorAll('div, span, a, button');
+    let hid = 0;
+    for (let i = 0; i < all.length; i++) {
+      const el = all[i];
+      if (el.dataset.hrHidden || el.children.length) continue;
       if ((el.textContent || '').trim().length > 2) continue;
-      if (el.dataset.hrHidden) continue;
       const r = el.getBoundingClientRect();
-      if (r.width < 26 || r.width > 44) continue;
-      if (Math.abs(r.width - r.height) > 3) continue;      // 정사각형
+      if (r.width < 24 || r.width > 48) continue;
+      if (Math.abs(r.width - r.height) > 4) continue;      // 정사각형
       const st = window.getComputedStyle(el);
       const radius = parseFloat(st.borderRadius) || 0;
-      const round = st.borderRadius.indexOf('%') >= 0 || radius >= r.width / 3;
-      if (!round) continue;
-      // 빨간 바탕 (SK 액션 레드). 다른 작은 동그라미까지 지우면 안 된다.
-      const bg = st.backgroundColor || '';
-      const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+      if (st.borderRadius.indexOf('%') < 0 && radius < r.width / 3) continue;
+      // 빨간 바탕 (SK 액션 레드). 라디오 점 같은 작은 동그라미는 안 지운다.
+      const m = (st.backgroundColor || '').match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
       if (!m || +m[1] < 150 || +m[2] > 90 || +m[3] > 90) continue;
       el.dataset.hrHidden = '1';
       el.style.display = 'none';
+      hid += 1;
+    }
+    if (hid) {
       this._avatarTries = 0;
+      note('프로필 원 감춤', { 개수: hid });
       return;
     }
     // 아직 안 그려졌을 수 있다. 몇 번 더 본다 — 한 번 훑고 포기하면
     // 다음 화면 갱신이 없는 한 영영 안 지워진다.
     this._avatarTries = (this._avatarTries || 0) + 1;
-    if (this._avatarTries <= 8) {
+    if (this._avatarTries <= 12) {
       setTimeout(() => {
         const v = this.state.view;
         if (v === 'member' || v === 'member-report') this.hideMemberAvatar();
-      }, 120);
+      }, 150);
     }
   },
 
@@ -779,14 +804,32 @@ Object.assign(Component.prototype, {
       return (s.memberRoundsByCourse || {})[s.currentReportCourse] || [];
     }
     if (s.view === 'admin-review') {
-      // 같은 사람의 다른 회차 카드. 1차수·2차수를 함께 올렸을 때 생긴다.
+      // **같은 사람**의 다른 회차 카드. 1차수·2차수를 함께 올렸을 때 생긴다.
+      //
+      // 예전에는 사번만 보고 골랐다. 명부 매칭이 안 되면 사번 자리에
+      // 'CARD-3' 같은 임시값이 들어가는데, 그 값이 겹치는 순간 남의 카드가
+      // 회차 단추로 올라온다. 그걸 누르면 **다른 사람 리포트로 넘어갔다** —
+      // '1차수' 단추가 다섯 개 뜨던 것이 이것이다.
+      //
+      // 그래서 이름까지 같이 보고, 회차 이름이 겹치면 아예 안 그린다.
+      // 애매하면 단추를 안 만드는 편이 남의 리포트를 여는 것보다 낫다.
       const sel = (s.mainMembers || [])[s.selectedIdx];
       if (!sel) return [];
       const byCard = s.reportIdByCard || {};
-      return (s.mainMembers || [])
-        .filter((m) => m.empId === sel.empId && byCard[m.cardId])
-        .map((m) => ({ reportId: byCard[m.cardId], label: m.round || '이번 회차',
-                       date: '', score: null, sent: false }));
+      const mine = (s.mainMembers || []).filter((m) =>
+        byCard[m.cardId]
+        && m.rawName === sel.rawName
+        && String(m.empId) === String(sel.empId));
+
+      const seen = {};
+      for (let i = 0; i < mine.length; i++) {
+        const key = mine[i].round || '';
+        if (!key || seen[key]) return [];     // 회차가 없거나 겹친다 → 포기
+        seen[key] = 1;
+      }
+      return mine.map((m) => ({
+        reportId: byCard[m.cardId], label: m.round,
+        date: '', score: null, sent: false }));
     }
     return [];
   },
@@ -964,14 +1007,113 @@ Object.assign(Component.prototype, {
       this.showToast('먼저 파일을 올려 리포트를 만들어 주세요.');
       return;
     }
+    // 고른 사람만 보낸다. 아무도 안 골랐으면 보낼 수 있는 전원.
+    const pick = s.sendPick || null;
+    const able = (s.mainMembers || []).filter((m) => m.sendable && m.email);
+    const ids = pick
+      ? able.filter((m) => pick[m.cardId] !== false).map((m) => m.cardId)
+      : able.map((m) => m.cardId);
+    if (!ids.length) {
+      this.showToast('보낼 사람을 한 명 이상 골라 주세요.');
+      return;
+    }
+    if (!confirm(ids.length + '명에게 리포트를 보냅니다.\n\n'
+                 + '메일은 되돌릴 수 없습니다. 보낼까요?')) return;
+
     this.setState({ sendStage: 'loading' });
     try {
-      await API.post('/reports/send/upload/' + s.uploadId, null);
+      await API.post('/reports/send/upload/' + s.uploadId, { cardIds: ids });
       this.watchSending(s.uploadId);
     } catch (err) {
       this.setState({ sendStage: 'before' });
       this.showToast('발송 실패 — ' + err.message);
     }
+  },
+
+  // 발송 화면의 수신자 표에 고르는 칸을 붙인다. 스무 명 중 셋만 다시
+  // 보내야 할 때, 전체 발송밖에 없으면 열일곱 명이 같은 메일을 두 번 받는다.
+  //
+  // 기본은 **전원 선택**이다. 고르는 일을 안 하던 사람이 갑자기 아무도
+  // 안 골라진 화면을 보면 무엇이 잘못된 줄 안다.
+  paintSendPicker() {
+    const s = this.state;
+    if (s.sendStage !== 'before') return;
+    const able = (s.mainMembers || []).filter((m) => m.sendable && m.email);
+    if (!able.length) return;
+
+    const anchor = document.querySelector('[data-hr-send-pick]')
+      || this._findSendAnchor();
+    if (!anchor) return;
+    anchor.setAttribute('data-hr-send-pick', '1');
+
+    const pick = s.sendPick || {};
+    const stamp = able.map((m) => m.cardId + (pick[m.cardId] === false ? '-' : '+'))
+      .join(',');
+    let box = document.getElementById('hr-send-pick');
+    if (box && box.dataset.stamp === stamp) return;
+    if (box) box.remove();
+
+    box = document.createElement('div');
+    box.id = 'hr-send-pick';
+    box.dataset.stamp = stamp;
+    box.style.cssText = 'margin:0 0 16px;padding:14px 16px;border-radius:10px;'
+      + 'background:#FAFAFC;border:1px solid #E4E4E7;font-size:13px';
+
+    const on = able.filter((m) => pick[m.cardId] !== false).length;
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;gap:10px;'
+      + 'flex-wrap:wrap;margin-bottom:10px;font-weight:600;color:#1B1B1D';
+    head.innerHTML = '보낼 사람 <b style="color:#EA002C">' + on + '</b>'
+      + ' / ' + able.length + '명';
+    const all = document.createElement('button');
+    all.type = 'button';
+    all.textContent = on === able.length ? '전체 해제' : '전체 선택';
+    all.style.cssText = 'font:inherit;font-size:12px;font-weight:600;'
+      + 'background:#fff;border:1px solid #E4E4E7;border-radius:999px;'
+      + 'padding:5px 12px;cursor:pointer';
+    all.onclick = () => {
+      const next = {};
+      able.forEach((m) => { next[m.cardId] = on !== able.length; });
+      this.setState({ sendPick: next });
+    };
+    head.appendChild(all);
+    box.appendChild(head);
+
+    const list = document.createElement('div');
+    list.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px';
+    able.forEach((m) => {
+      const yes = pick[m.cardId] !== false;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.style.cssText = 'font:inherit;font-size:12.5px;border-radius:999px;'
+        + 'padding:7px 13px;cursor:pointer;text-align:left;'
+        + (yes ? 'background:#FDE9ED;border:1px solid #EA002C;color:#A80020;'
+               : 'background:#fff;border:1px solid #E4E4E7;color:#78787E;');
+      b.textContent = (yes ? '✓ ' : '　') + m.rawName
+        + (m.round ? ' · ' + m.round : '');
+      b.title = m.email;
+      b.onclick = () => {
+        const next = { ...(this.state.sendPick || {}) };
+        next[m.cardId] = !yes;
+        this.setState({ sendPick: next });
+      };
+      list.appendChild(b);
+    });
+    box.appendChild(list);
+    anchor.insertBefore(box, anchor.firstChild);
+  },
+
+  // '발송 대상' 표가 들어 있는 칸. 글자로 찾는다.
+  _findSendAnchor() {
+    const all = document.querySelectorAll('div');
+    for (let i = 0; i < all.length; i++) {
+      const t = (all[i].textContent || '');
+      if (all[i].children.length >= 1 && all[i].children.length <= 6
+          && t.indexOf('발송') >= 0 && t.length < 400) {
+        return all[i];
+      }
+    }
+    return null;
   },
 
   // 한 사람에 1~3초씩 걸린다. 열 명이면 서른 초 — 그동안 아무 말이 없으면
@@ -1392,7 +1534,7 @@ Object.assign(Component.prototype, {
       memberExtraCourses: [], memberReportByCourse: {},
       memberRoundsByCourse: {}, memberRoundPick: {},
       memberName: '', memberEmpId: '',
-      sendStage: 'before', sendRows: null,
+      sendStage: 'before', sendRows: null, sendPick: null,
       fileFilter: null, reviewFileFilter: null,
       courseLinkStatus: 'idle', linkedCourseKey: null,
       courseLinkChoiceLabel: '', newCourseName: '',
@@ -2007,6 +2149,7 @@ Component.prototype._syncReport = function () {
     this.loadCourseList();          // '다른 과정 선택' 목록을 엔진 것으로 채운다
   }
   if (s.view === 'admin-review') this.paintReviewTabs();
+  if (s.view === 'admin-send') this.paintSendPicker();
 
   // 구성원으로 들어오면 그 사번의 리포트를 불러온다
   if (s.view === 'member' || s.view === 'member-report') {
@@ -2014,6 +2157,7 @@ Component.prototype._syncReport = function () {
     this.unclipNotices();
     this.paintToc();
     this.hideMemberAvatar();
+    this.fixNewBadge();
   }
 
   if (s.view === 'admin' && s.subTab === 'insight') {
